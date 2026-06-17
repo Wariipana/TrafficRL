@@ -19,17 +19,20 @@ class TrainingConfig:
     n_steps:         int = 2048
     batch_size:      int = 64
     n_epochs:        int = 10
-    # Tuned in two passes against real runs:
-    #  pass 1 (3e-4, kl 0.03): approx_kl ~0.12, clip ~0.6 — unstable, policy stayed
-    #          near-uniform (entropy ≈ max).
-    #  pass 2 (1e-4, kl 0.03): KL healthy (~0.03) but ep_rew_mean FLAT over 70k
-    #          steps — the target_kl cut each update at epoch ~6/10 and lr was too
-    #          low, so the policy barely moved per rollout.
-    #  pass 3 (this): lr 1e-4→2e-4 and target_kl 0.03→0.06 to let updates actually
-    #          progress while staying clear of the 0.12 instability.
+    # Tuned across real runs (4x4 then 8x8):
+    #  pass 1 (3e-4, kl 0.03):  approx_kl ~0.12, clip ~0.6 — unstable.
+    #  pass 2 (1e-4, kl 0.03):  KL healthy but reward FLAT — updates cut too early.
+    #  pass 3 (2e-4, kl 0.06):  fine for 4x4; in 8x8 the per-update KL hits ~0.08
+    #          with 56 agents, so target_kl=0.06 aborted the update at epoch ~2 and
+    #          the policy stayed near-uniform (entropy ≈ max) → reward FLAT again.
+    #  pass 4 (this): target_kl 0.06→0.12 and ent_coef 0.003→0.001. The KL grows
+    #          fast with many agents, so a stricter target throttles the update;
+    #          a looser cap + less entropy pressure lets the policy actually commit.
+    #          With many agents the action-space entropy is large (56·ln2 ≈ 39), so
+    #          even 0.001 keeps meaningful exploration.
     learning_rate:   float = 2e-4
-    ent_coef:        float = 0.003
-    target_kl:       float = 0.06      # stop a PPO update early if it diverges too far
+    ent_coef:        float = 0.001
+    target_kl:       float = 0.12      # stop a PPO update early if it diverges too far
     log_dir:         str  = "rl/runs"
     save_path:       str  = "rl/models/ppo_centralized"
     seed:            int  = 42
