@@ -1,0 +1,22 @@
+# 4x4 grid — debug rapido, ~16 intersecciones, ~20 semaforos
+city:
+  grid_width: 4
+  grid_height: 4
+  block_size: 100.0          # metros por bloque
+  avenue_probability: 0.3
+  street_probability: 0.7
+  residential_ratio: 0.6
+  commercial_ratio: 0.3
+  industrial_ratio: 0.1
+  traffic_light_density: 0.8
+  seed: 42
+
+simulation:
+  max_vehicles: 200
+  spawn_rate_base: 0.5       # vehiculos/segundo en condicion normal
+  episode_length_steps: 1000
+  dt: 0.1                    # segundos por step
+
+observation_mode: "perfect"
+communication_mode: "none"
+shm_prefix: "trafficrl"

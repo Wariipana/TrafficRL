@@ -1,0 +1,36 @@
+# Build
+simulation/build/
+*.o
+*.a
+*.so
+*.so.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# Shared memory (runtime artifacts)
+/dev/shm/trafficrl_*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Models / logs
+rl/runs/
+rl/models/
+*.zip
+*.pkl
+tensorboard_logs/
+
+# OS
+.DS_Store
+Thumbs.db

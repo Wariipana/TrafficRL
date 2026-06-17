@@ -1,0 +1,10 @@
+# Pesos de la funcion de recompensa (ver rl/env/reward.py)
+reward:
+  alpha: 0.4        # penalizacion tiempo de espera promedio
+  beta: 0.3         # penalizacion vehiculos detenidos
+  gamma: 0.2        # penalizacion longitud de cola maxima
+  delta: 0.1        # recompensa por throughput local
+  eta: 0.3          # recompensa por throughput global de zona
+  zeta: 0.2         # penalizacion por propagacion de congestion
+  local_weight: 0.7
+  global_weight: 0.3

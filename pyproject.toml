@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trafficrl"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "gymnasium>=1.0,<2.0",
+    "stable-baselines3>=2.3,<3.0",
+    "pettingzoo>=1.26,<2.0",
+    "torch>=2.2",
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    "tensorboard>=2.16",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-timeout>=2.3",
+]
+viz = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rl*", "webviz*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+timeout = 30
