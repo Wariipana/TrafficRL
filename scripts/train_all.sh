@@ -6,8 +6,12 @@
 # uno tras otro (cada uno guarda su modelo automáticamente) y limpia al terminar.
 #
 # Uso:
-#     bash scripts/train_all.sh                       # 4x4, pasos por defecto
+#     bash scripts/train_all.sh                       # 4x4 (city_small), pasos por defecto
+#     bash scripts/train_all.sh --config config/city_medium.yaml   # 8x8, tamaño y warmup automáticos
 #     bash scripts/train_all.sh --config config/city_small.yaml --steps 300000
+#
+# El tamaño de la ciudad (--width/--height) y el --warmup se derivan del --config
+# automáticamente; puedes sobreescribir cualquiera pasándolo a mano.
 #
 # Modelos resultantes:
 #     rl/models/ppo_centralized.zip      (+ _vecnorm.pkl)
@@ -32,8 +36,9 @@ export TRAFFICRL_SHM_PREFIX="$SHM_PREFIX"
 # --- argumentos --------------------------------------------------------------
 CONFIG="config/city_small.yaml"
 STEPS=300000
-WIDTH=4
-HEIGHT=4
+WIDTH=""                   # vacío = derivar del CONFIG (grid_width/grid_height)
+HEIGHT=""
+WARMUP=""                  # vacío = derivar del tamaño de la grilla (ver abajo)
 SEED=42
 BENCH_EPISODES=20          # episodios de evaluación por algoritmo en el benchmark
 while [[ $# -gt 0 ]]; do
@@ -42,11 +47,34 @@ while [[ $# -gt 0 ]]; do
     --steps)           STEPS="$2";           shift 2 ;;
     --width)           WIDTH="$2";           shift 2 ;;
     --height)          HEIGHT="$2";          shift 2 ;;
+    --warmup)          WARMUP="$2";          shift 2 ;;
     --seed)            SEED="$2";            shift 2 ;;
     --bench-episodes)  BENCH_EPISODES="$2";  shift 2 ;;
     *) echo "Argumento desconocido: $1" >&2; exit 1 ;;
   esac
 done
+
+# La TOPOLOGÍA la define el motor C++ (--width/--height), no el YAML: el lado
+# Python solo lee el grafo que el motor publica. Por eso debemos arrancar el motor
+# con el tamaño del CONFIG; si no, entrenaríamos en 4x4 creyendo que es 8x8.
+# Leemos grid_width/grid_height del YAML salvo que se pasen a mano.
+read_yaml_int() {  # $1=clave  → primer entero tras "clave:"
+  grep -E "^[[:space:]]*$1:" "$CONFIG" | head -1 | grep -oE '[0-9]+' | head -1
+}
+[[ -z "$WIDTH"  ]] && WIDTH="$(read_yaml_int grid_width)"
+[[ -z "$HEIGHT" ]] && HEIGHT="$(read_yaml_int grid_height)"
+WIDTH="${WIDTH:-4}"; HEIGHT="${HEIGHT:-4}"   # fallback si el YAML no lo trae
+
+# Warmup = pasos para pre-llenar la ciudad en cada reset. Medido empíricamente
+# (con los semáforos ciclando, como en el entrenamiento): el llenado satura a
+# ~1000 pasos en 4x4 y a ~2000 en 8x8 — escala aprox. con el área (W·H). Usamos
+# 31·(W·H) acotado a [1000, 3000]: da ≈1000 en 4x4 (16·31≈500→clamp 1000) y
+# ≈2000 en 8x8 (64·31≈2000). Por encima el llenado marginal cae y sólo añade coste.
+if [[ -z "$WARMUP" ]]; then
+  WARMUP=$(( 31 * WIDTH * HEIGHT ))
+  (( WARMUP < 1000 )) && WARMUP=1000
+  (( WARMUP > 3000 )) && WARMUP=3000
+fi
 
 # --- comprobaciones previas --------------------------------------------------
 if [[ ! -x "$SERVER" ]]; then
@@ -61,8 +89,9 @@ fi
 bash "$SCRIPT_DIR/cleanup_shm.sh" "$SHM_PREFIX" >/dev/null 2>&1 || true
 
 # --- arrancar el motor C++ ---------------------------------------------------
-echo "[train_all] Iniciando motor: $SERVER --width $WIDTH --height $HEIGHT --seed $SEED --prefix $SHM_PREFIX"
-"$SERVER" --width "$WIDTH" --height "$HEIGHT" --seed "$SEED" --prefix "$SHM_PREFIX" &
+echo "[train_all] Motor: ${WIDTH}x${HEIGHT} grid (de $CONFIG), warmup=$WARMUP, seed=$SEED"
+"$SERVER" --width "$WIDTH" --height "$HEIGHT" --warmup "$WARMUP" \
+          --seed "$SEED" --prefix "$SHM_PREFIX" &
 SERVER_PID=$!
 
 echo "[train_all] Esperando a la memoria compartida…"
