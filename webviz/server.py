@@ -167,16 +167,19 @@ def compare_page() -> HTMLResponse:
 def results() -> JSONResponse:
     """Return every benchmark JSON in rl/results/ (one per config), each holding
     the per-algorithm summary + episodes produced by rl.training.benchmark."""
+    from rl.benchmark.report import _json_safe
     out = []
     for path in sorted(glob.glob(os.path.join(RESULTS_DIR, "benchmark_*.json"))):
         try:
             with open(path, encoding="utf-8") as f:
-                data = json.load(f)
+                data = json.load(f)   # tolerant: accepts legacy NaN/Infinity
             out.append({
                 "file": os.path.basename(path),
                 "config": os.path.basename(path)[len("benchmark_"):-len(".json")],
                 "mtime": os.path.getmtime(path),
-                "algorithms": data,
+                # sanitise: legacy files may contain NaN, which would make the
+                # response invalid JSON and break the browser's parse.
+                "algorithms": _json_safe(data),
             })
         except Exception:
             continue

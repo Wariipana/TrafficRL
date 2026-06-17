@@ -18,6 +18,21 @@ from rl.benchmark.metrics import AlgorithmResult
 from rl.benchmark.statistical import compare_all_pairs, PairwiseComparison
 
 
+def _json_safe(obj):
+    """Recursively replace NaN/Infinity with None so the output is STANDARD JSON.
+    Python's json writes literal NaN/Infinity by default, which browsers (and any
+    strict parser) reject — that's what broke the comparison page. Degenerate
+    stats (e.g. zero-variance metrics from barely-trained models) produce these."""
+    import math
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    return obj
+
+
 _COL_W = 18   # column width for ASCII table
 
 
@@ -185,5 +200,7 @@ def save_json(results: Dict[str, AlgorithmResult], path: str) -> None:
         ]
 
     with open(path, "w") as f:
-        json.dump(out, f, indent=2)
+        # allow_nan=False guarantees standard JSON; _json_safe already turned any
+        # non-finite value into null so this won't raise.
+        json.dump(_json_safe(out), f, indent=2, allow_nan=False)
     print(f"[report] JSON saved → {path}")

@@ -65,10 +65,17 @@ function fmt(v, d) {
   return Number(v).toFixed(d);
 }
 
+const REFERENCE = "fixed_random";   // baseline shown as the comparison reference
+
 function renderTable(algorithms) {
-  // algorithms: { name: { config_label, summary: {...}, episodes: [...] } }
-  const names = Object.keys(algorithms);
-  const ref = algorithms["fixed_time"] ? algorithms["fixed_time"].summary : null;
+  // algorithms: { name: { config_label, summary: {...}, episodes: [...] }, ... }
+  // The benchmark JSON also carries a "_pairwise_stats" list — skip any key that
+  // isn't an algorithm entry (no .summary), or accessing .summary throws and the
+  // whole page fails to load.
+  const names = Object.keys(algorithms).filter(function (n) {
+    return algorithms[n] && typeof algorithms[n] === "object" && algorithms[n].summary;
+  });
+  const ref = algorithms[REFERENCE] ? algorithms[REFERENCE].summary : null;
 
   // best (lowest mean_wait) for the ★
   let bestName = null, bestWait = Infinity;
@@ -84,16 +91,16 @@ function renderTable(algorithms) {
   let rows = "";
   for (const n of names) {
     const s = algorithms[n].summary;
-    const cls = (n === bestName ? "best" : "") + (n === "fixed_time" ? " ref" : "");
+    const cls = (n === bestName ? "best" : "") + (n === REFERENCE ? " ref" : "");
     let row = `<tr class="${cls.trim()}"><td>${n}</td>`;
     for (const m of METRICS) row += `<td>${fmt(s[m.key], m.fmt)}</td>`;
-    // improvement vs fixed_time (wait reduction %)
-    if (ref && n !== "fixed_time" && typeof s.mean_wait_s === "number") {
+    // improvement vs the reference baseline (wait reduction %)
+    if (ref && n !== REFERENCE && typeof s.mean_wait_s === "number") {
       const delta = (s.mean_wait_s - ref.mean_wait_s) / (ref.mean_wait_s + 1e-9) * 100;
       const klass = delta < 0 ? "good" : "bad";
       const sign = delta < 0 ? "" : "+";
       row += `<td class="${klass}">${sign}${delta.toFixed(1)}%</td>`;
-    } else if (n === "fixed_time") {
+    } else if (n === REFERENCE) {
       row += `<td>(referencia)</td>`;
     } else {
       row += `<td>—</td>`;
@@ -119,7 +126,10 @@ async function load() {
     let html = "";
     for (const r of results) {
       const when = new Date(r.mtime * 1000).toLocaleString();
-      const nAlgos = Object.keys(r.algorithms).length;
+      // count only real algorithm entries (exclude _pairwise_stats etc.)
+      const nAlgos = Object.keys(r.algorithms).filter(function (n) {
+        return r.algorithms[n] && r.algorithms[n].summary;
+      }).length;
       html += `<div class="card">
         <h2>${r.config} <span class="tag">${nAlgos} algoritmos</span></h2>
         <div class="meta">${r.file} · generado ${when}</div>
