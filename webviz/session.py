@@ -594,7 +594,9 @@ class TrainingSession:
                     n_steps=ppo_n_steps, batch_size=ppo_batch, n_epochs=10,
                     learning_rate=p.get("learning_rate", 3e-4),
                     ent_coef=p.get("ent_coef", 0.01),
-                    verbose=0, policy_kwargs={"net_arch": [256, 256, 128]})
+                    verbose=0, policy_kwargs={"net_arch": [256, 256, 128]},
+                    # force CPU: small MlpPolicy runs slower on GPU (see ppo_agent)
+                    device="cpu")
         # keep the artefacts so the model can be saved on demand afterward
         self._model = model
         self._venv  = venv

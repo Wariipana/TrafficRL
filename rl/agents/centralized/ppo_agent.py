@@ -52,6 +52,9 @@ def train(config: TrainingConfig) -> PPO:
         tensorboard_log=config.log_dir,
         seed=config.seed,
         policy_kwargs={"net_arch": [256, 256, 128]},
+        # Force CPU: with a small MlpPolicy the GPU is slower (data-transfer
+        # overhead dominates the tiny forward pass). SB3 warns about this too.
+        device="cpu",
     )
 
     model.learn(total_timesteps=config.total_timesteps)
@@ -64,4 +67,6 @@ def train(config: TrainingConfig) -> PPO:
 
 
 def load_model(save_path: str, env: gymnasium.Env | None = None) -> PPO:
-    return PPO.load(save_path, env=env)
+    # CPU for inference too: the MlpPolicy is small and GPU transfer overhead
+    # would only slow the per-step prediction during visualization.
+    return PPO.load(save_path, env=env, device="cpu")
