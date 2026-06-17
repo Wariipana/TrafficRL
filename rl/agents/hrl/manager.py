@@ -43,14 +43,20 @@ class ManagerNetwork(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
         )
-        self.goal_head  = nn.Linear(hidden_dim, GOAL_DIM)
+        self.goal_head  = nn.Linear(hidden_dim, GOAL_DIM)   # mean of the goal policy
         self.value_head = nn.Linear(hidden_dim, 1)
+        # The Manager is a stochastic Gaussian policy over goals: it must EXPLORE
+        # different goals and learn (via policy gradient) which ones lead to high
+        # zone reward. A learnable log-std gives that exploration. Previously the
+        # Manager was deterministic and "trained" by MSE against its own output,
+        # so it had no learning signal at all and never improved its goals.
+        self.log_std    = nn.Parameter(torch.full((GOAL_DIM,), -0.7))  # σ≈0.5
 
     def forward(self, zone_feats: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         h      = self.zone_encoder(zone_feats)        # (Z, hidden)
-        goals  = torch.sigmoid(self.goal_head(h))     # (Z, GOAL_DIM) in [0,1]
+        mean   = torch.sigmoid(self.goal_head(h))     # (Z, GOAL_DIM) mean in [0,1]
         values = self.value_head(h).squeeze(-1)       # (Z,)
-        return goals, values
+        return mean, values
 
 
 def aggregate_zones(state: StateSnapshot, num_zones: int) -> np.ndarray:
@@ -165,19 +171,30 @@ class HRLManager:
         for r, d in zip(reversed(rewards), reversed(dones)):
             G = r + self.cfg.goal_horizon * G * (1.0 - d)
             returns.insert(0, G)
-        returns_t = torch.tensor(returns, dtype=torch.float32)
+        returns_t = torch.tensor(returns, dtype=torch.float32)          # (T,)
+        # Broadcast the scalar per-step zone reward/return to every zone. (The
+        # Manager's reward is the mean zone reward of that step; all zones share it.)
+        returns_zt = returns_t.unsqueeze(-1).expand(-1, self.num_zones)  # (T, Z)
 
         total_loss = 0.0
         for _ in range(self.cfg.n_epochs):
-            pred_goals, values = self._net(zone_feats_t)
-            # Manager treats goals as deterministic output; we use MSE as policy loss
-            # (simplified FeUdal / HIRO-style: manager trains to match useful goals)
-            goal_loss = F.mse_loss(pred_goals, goals_t)
-            vf_loss   = F.mse_loss(values, returns_t.unsqueeze(-1).expand_as(values))
-            loss = goal_loss + self.cfg.vf_coef * vf_loss
+            mean, values = self._net(zone_feats_t)          # (T, Z, GOAL_DIM), (T, Z)
+            std  = self._net.log_std.exp()
+            dist = torch.distributions.Normal(mean, std)
+            # log-prob of the goals that were actually sampled and executed
+            log_probs = dist.log_prob(goals_t).sum(-1)      # (T, Z)
+            entropy   = dist.entropy().sum(-1)               # (T, Z)
+
+            advantage = (returns_zt - values).detach()      # baseline = critic
+            # Policy gradient: push goals that led to high zone reward up in
+            # probability. THIS is the learning signal the old MSE loss lacked.
+            pg_loss = -(log_probs * advantage).mean()
+            vf_loss = F.mse_loss(values, returns_zt)
+            loss = pg_loss + self.cfg.vf_coef * vf_loss - self.cfg.ent_coef * entropy.mean()
 
             self._opt.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self._net.parameters(), 0.5)
             self._opt.step()
             total_loss += loss.item()
 
@@ -194,5 +211,9 @@ class HRLManager:
         zone_feats = aggregate_zones(state, self.num_zones)  # (Z, 5)
         feats_t    = torch.tensor(zone_feats, dtype=torch.float32)
         with torch.no_grad():
-            goals_t, _ = self._net(feats_t)
+            mean, _ = self._net(feats_t)
+            std     = self._net.log_std.exp()
+            # Sample goals so the Manager explores; clamp back into the valid [0,1]
+            # range the Worker's reward shaping expects.
+            goals_t = torch.normal(mean, std).clamp(0.0, 1.0)
         return goals_t.numpy()   # (Z, GOAL_DIM)

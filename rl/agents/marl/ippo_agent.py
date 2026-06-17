@@ -148,9 +148,11 @@ class IPPOConfig:
     gae_lambda:      float  = 0.95
     clip_eps:        float  = 0.2
     vf_coef:         float  = 0.5
-    ent_coef:        float  = 0.01
+    # ent_coef 0.01→0.003 and lr 3e-4→1e-4, same reasoning as centralized PPO:
+    # keep the policy from staying near-uniform and the updates from diverging.
+    ent_coef:        float  = 0.003
     max_grad_norm:   float  = 0.5
-    learning_rate:   float  = 3e-4
+    learning_rate:   float  = 1e-4
     k_hops:          int    = 1            # GNN neighborhood hops
     gnn_hidden:      int    = 128
     gnn_embed:       int    = 64
@@ -258,6 +260,10 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
 
     total_steps = 0
     episode     = 0
+    # Per-episode reward accumulator so the log shows whether the agent is actually
+    # learning (mean reward per agent over the episode) — not just the episode count.
+    ep_reward_sum = 0.0
+    ep_len        = 0
 
     while total_steps < cfg.total_timesteps:
         buffer.reset()
@@ -286,12 +292,17 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
 
                 buffer.add(flat_all, adj_mask, actions_t, log_probs_t, rewards_t, values_t, dones_t)
                 total_steps += n_agents
+                ep_reward_sum += float(rewards_t.mean())  # mean reward across agents this step
+                ep_len        += 1
 
                 if not env.agents:
                     episode += 1
                     obs_d, _ = env.reset()
                     if episode % 10 == 0:
-                        print(f"[IPPO] ep={episode} steps={total_steps}")
+                        print(f"[IPPO] ep={episode} steps={total_steps} "
+                              f"ep_rew_mean={ep_reward_sum:.2f} ep_len={ep_len}")
+                    ep_reward_sum = 0.0
+                    ep_len        = 0
 
             # Bootstrap value for GAE
             flat_last = torch.tensor(

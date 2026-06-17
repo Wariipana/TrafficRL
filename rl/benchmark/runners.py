@@ -18,26 +18,36 @@ from rl.benchmark.metrics import EpisodeMetrics, AlgorithmResult
 
 # ---- helpers ----
 
-def _snapshot_to_episode_metrics(
-    state: StateSnapshot,
-    ep_id:        int,
-    steps:        int,
-    ep_max_wait:  float,
-    ep_throughput_acc: float,
-) -> EpisodeMetrics:
-    avg_speed = float(np.mean([
+def episode_speed(state: StateSnapshot) -> float:
+    """Mean per-lane speed across all active lanes in a single snapshot."""
+    return float(np.mean([
         np.mean(s.avg_speed[:s.num_lanes]) if s.num_lanes > 0
         else 0.0
         for s in state.intersections
     ])) if state.intersections else 0.0
 
+
+def _episode_metrics(
+    ep_id:             int,
+    steps:             int,
+    ep_max_wait:       float,
+    ep_throughput_acc: float,
+    ep_wait_acc:       float,
+    ep_congestion_acc: float,
+    ep_speed_acc:      float,
+) -> EpisodeMetrics:
+    # Wait/congestion/speed are averaged over the WHOLE episode, not read from the
+    # last snapshot. A single final-step reading is noisy and unfair: it rewards a
+    # policy that happens to leave the grid empty on the last step and punishes one
+    # that doesn't, regardless of how the episode actually went.
+    inv = 1.0 / max(steps, 1)
     return EpisodeMetrics(
         total_vehicles_served = ep_throughput_acc,
-        throughput_per_step   = ep_throughput_acc / max(steps, 1),
-        avg_wait_time_s       = state.avg_wait_global,
+        throughput_per_step   = ep_throughput_acc * inv,
+        avg_wait_time_s       = ep_wait_acc       * inv,
         max_wait_time_s       = ep_max_wait,
-        congestion_spread     = state.congestion_spread,
-        avg_speed_ms          = avg_speed,
+        congestion_spread     = ep_congestion_acc * inv,
+        avg_speed_ms          = ep_speed_acc      * inv,
         steps_completed       = steps,
         episode_id            = ep_id,
     )
@@ -97,6 +107,9 @@ class FixedRandomRunner(BaseRunner):
         step   = 0
         ep_max_wait = 0.0
         ep_tp_acc   = 0.0
+        ep_wait_acc = 0.0
+        ep_cong_acc = 0.0
+        ep_spd_acc  = 0.0
 
         n_lights = self._env.action_space.nvec.shape[0]
         # per-light fixed period + offset, constant for the whole episode
@@ -112,9 +125,12 @@ class FixedRandomRunner(BaseRunner):
             step += 1
             ep_max_wait  = max(ep_max_wait, info.get("max_wait_global", 0.0))
             ep_tp_acc   += info.get("total_throughput", 0.0)
+            ep_wait_acc += info.get("avg_wait_global", 0.0)
+            ep_cong_acc += info.get("congestion_spread", 0.0)
+            ep_spd_acc  += episode_speed(self._env.unwrapped._last_state)
 
-        state = self._env.unwrapped._last_state
-        return _snapshot_to_episode_metrics(state, seed, step, ep_max_wait, ep_tp_acc)
+        return _episode_metrics(seed, step, ep_max_wait, ep_tp_acc,
+                                ep_wait_acc, ep_cong_acc, ep_spd_acc)
 
     def close(self) -> None:
         self._env.close()
@@ -139,6 +155,9 @@ class PPOCentralizedRunner(BaseRunner):
         step   = 0
         ep_max_wait = 0.0
         ep_tp_acc   = 0.0
+        ep_wait_acc = 0.0
+        ep_cong_acc = 0.0
+        ep_spd_acc  = 0.0
 
         while not done:
             action, _ = self._model.predict(obs, deterministic=True)
@@ -147,9 +166,12 @@ class PPOCentralizedRunner(BaseRunner):
             step += 1
             ep_max_wait  = max(ep_max_wait, info.get("max_wait_global", 0.0))
             ep_tp_acc   += info.get("total_throughput", 0.0)
+            ep_wait_acc += info.get("avg_wait_global", 0.0)
+            ep_cong_acc += info.get("congestion_spread", 0.0)
+            ep_spd_acc  += episode_speed(self._env.unwrapped._last_state)
 
-        state = self._env.unwrapped._last_state
-        return _snapshot_to_episode_metrics(state, seed, step, ep_max_wait, ep_tp_acc)
+        return _episode_metrics(seed, step, ep_max_wait, ep_tp_acc,
+                                ep_wait_acc, ep_cong_acc, ep_spd_acc)
 
     def close(self) -> None:
         self._env.close()
@@ -195,6 +217,9 @@ class IPPOGNNRunner(BaseRunner):
         step     = 0
         ep_max_wait = 0.0
         ep_tp_acc   = 0.0
+        ep_wait_acc = 0.0
+        ep_cong_acc = 0.0
+        ep_spd_acc  = 0.0
 
         while not done:
             flat = torch.tensor(
@@ -212,9 +237,12 @@ class IPPOGNNRunner(BaseRunner):
             state = self._env._last_state
             ep_max_wait  = max(ep_max_wait, state.max_wait_global)
             ep_tp_acc   += state.total_throughput
+            ep_wait_acc += state.avg_wait_global
+            ep_cong_acc += state.congestion_spread
+            ep_spd_acc  += episode_speed(state)
 
-        state = self._env._last_state
-        return _snapshot_to_episode_metrics(state, seed, step, ep_max_wait, ep_tp_acc)
+        return _episode_metrics(seed, step, ep_max_wait, ep_tp_acc,
+                                ep_wait_acc, ep_cong_acc, ep_spd_acc)
 
     def close(self) -> None:
         self._env.close()
@@ -269,6 +297,9 @@ class HRLRunner(BaseRunner):
         step     = 0
         ep_max_wait = 0.0
         ep_tp_acc   = 0.0
+        ep_wait_acc = 0.0
+        ep_cong_acc = 0.0
+        ep_spd_acc  = 0.0
 
         while not done:
             state     = self._env._last_state
@@ -294,9 +325,12 @@ class HRLRunner(BaseRunner):
             state = self._env._last_state
             ep_max_wait  = max(ep_max_wait, state.max_wait_global)
             ep_tp_acc   += state.total_throughput
+            ep_wait_acc += state.avg_wait_global
+            ep_cong_acc += state.congestion_spread
+            ep_spd_acc  += episode_speed(state)
 
-        state = self._env._last_state
-        return _snapshot_to_episode_metrics(state, seed, step, ep_max_wait, ep_tp_acc)
+        return _episode_metrics(seed, step, ep_max_wait, ep_tp_acc,
+                                ep_wait_acc, ep_cong_acc, ep_spd_acc)
 
     def close(self) -> None:
         self._env.close()

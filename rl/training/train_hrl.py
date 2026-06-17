@@ -50,12 +50,18 @@ def main() -> None:
     worker  = HRLWorkerActorCritic().to(device)
     manager = HRLManager(ManagerConfig(), num_zones=num_zones)
 
-    w_opt   = torch.optim.Adam(worker.parameters(), lr=3e-4)
+    w_opt   = torch.optim.Adam(worker.parameters(), lr=1e-4)  # lowered like PPO/IPPO
 
     os.makedirs(args.save_dir, exist_ok=True)
     total_steps  = 0
     episode      = 0
     w_rollout: list[dict] = []
+    # Per-episode reward accumulators so the log shows whether learning progresses:
+    # the Worker's total reward (env + intrinsic goal shaping) and the env-only
+    # reward (comparable to the other algorithms' signal).
+    ep_worker_rew = 0.0
+    ep_env_rew    = 0.0
+    ep_len        = 0
 
     print(f"[HRL] agents={n_agents}  zones={num_zones}  device={device}")
 
@@ -90,6 +96,10 @@ def main() -> None:
             for i in range(n_agents)
         ], dtype=np.float32)
 
+        ep_worker_rew += float(rewards_np.mean())                  # env + intrinsic
+        ep_env_rew    += float(np.mean(list(rews_d.values())))     # env only
+        ep_len        += 1
+
         dones_np = np.array([
             float(terms_d.get(f"light_{i}", False) or trunc_d.get(f"light_{i}", False))
             for i in range(n_agents)
@@ -116,10 +126,17 @@ def main() -> None:
         if not env.agents:
             episode += 1
             obs_d, _ = env.reset()
+            # Update the Manager every episode (it was previously updated only on
+            # every 5th episode, wasting 4/5 of the collected transitions).
+            m_loss = manager.update()
             if episode % 5 == 0:
-                m_loss = manager.update()
-                print(f"[HRL] ep={episode} steps={total_steps} manager_loss={m_loss:.4f}" if m_loss else
-                      f"[HRL] ep={episode} steps={total_steps}")
+                mloss_s = f"manager_loss={m_loss:.4f}" if m_loss is not None else "manager_loss=n/a"
+                print(f"[HRL] ep={episode} steps={total_steps} "
+                      f"ep_rew_mean={ep_worker_rew:.2f} env_rew={ep_env_rew:.2f} "
+                      f"ep_len={ep_len} {mloss_s}")
+            ep_worker_rew = 0.0
+            ep_env_rew    = 0.0
+            ep_len        = 0
 
         # Worker PPO update every 1024 steps (per agent)
         if len(w_rollout) >= 1024 // n_agents:
@@ -145,7 +162,7 @@ def _update_worker(
     gae_lambda: float = 0.95,
     clip_eps:  float = 0.2,
     vf_coef:   float = 0.5,
-    ent_coef:  float = 0.01,
+    ent_coef:  float = 0.003,   # lowered like PPO/IPPO so the policy commits
     n_epochs:  int   = 4,
 ) -> None:
     import torch.nn.functional as F

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import gymnasium
 import numpy as np
 from stable_baselines3 import PPO
+from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from rl.env.traffic_env import TrafficEnv
@@ -18,8 +19,13 @@ class TrainingConfig:
     n_steps:         int = 2048
     batch_size:      int = 64
     n_epochs:        int = 10
-    learning_rate:   float = 3e-4
-    ent_coef:        float = 0.01
+    # lr lowered 3e-4→1e-4 and ent_coef 0.01→0.003: the default run showed
+    # approx_kl ~0.12 (target ~0.02) and clip_fraction ~0.6 sustained, with the
+    # policy stuck near-uniform (entropy ≈ max). Smaller steps + less entropy
+    # pressure let the policy actually commit to decisions.
+    learning_rate:   float = 1e-4
+    ent_coef:        float = 0.003
+    target_kl:       float = 0.03      # stop a PPO update early if it diverges too far
     log_dir:         str  = "rl/runs"
     save_path:       str  = "rl/models/ppo_centralized"
     seed:            int  = 42
@@ -29,6 +35,10 @@ def make_env(config: EnvConfig):
     def _init():
         env = TrafficEnv(config)
         env = gymnasium.wrappers.FlattenObservation(env)
+        # Monitor records per-episode reward/length so SB3 logs rollout/ep_rew_mean
+        # — the key signal for "is the agent actually learning". Without it SB3
+        # only prints train/ and time/, and the reward curve is invisible.
+        env = Monitor(env)
         return env
     return _init
 
@@ -48,6 +58,7 @@ def train(config: TrainingConfig) -> PPO:
         n_epochs=config.n_epochs,
         learning_rate=config.learning_rate,
         ent_coef=config.ent_coef,
+        target_kl=config.target_kl,
         verbose=1,
         tensorboard_log=config.log_dir,
         seed=config.seed,
