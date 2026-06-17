@@ -71,7 +71,6 @@ tiempo fijo—. Se llena con los reportes de `rl/results/` que genera
 | Algoritmo            | Descripción                                            |
 |----------------------|--------------------------------------------------------|
 | PPO centralizado     | Una política sobre la observación global (SB3).        |
-| A2C                  | Variante on-policy de SB3.                              |
 | IPPO + GNN           | Multi-agente: un agente por semáforo + canal GNN.      |
 | HRL (Manager-Worker) | Jerárquico: el Manager fija metas por zona al Worker.  |
 | Fijo / Aleatorio     | Baselines sin aprendizaje, para comparar.              |

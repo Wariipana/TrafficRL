@@ -475,7 +475,7 @@ function collectParams() {
 //  - data-algos on an element restricts it to a whitelist of algorithms
 function syncParamVisibility() {
   const algo = $("algo").value || "ppo";
-  const isRL = ["ppo", "a2c", "ippo_gnn", "hrl"].includes(algo);
+  const isRL = ["ppo", "ippo_gnn", "hrl"].includes(algo);
   for (const el of document.querySelectorAll(".rl-param")) {
     const only = el.getAttribute("data-algos");
     const ok = isRL && (!only || only.split(" ").includes(algo));

@@ -18,7 +18,6 @@ en Linux a ~3 400 pasos/segundo sin GPU.
 | Algoritmo | Tipo | Detalle |
 |---|---|---|
 | **PPO centralizado** | On-policy, agente único | Observación global aplanada, implementado con Stable-Baselines3. |
-| **A2C** | On-policy, agente único | Variante síncrona de SB3; baseline más simple que PPO. |
 | **IPPO + GNN** | Multi-agente descentralizado | Un agente por semáforo con política compartida; las observaciones locales se enriquecen con un Graph Neural Network que propaga información entre intersecciones vecinas. |
 | **HRL (Manager-Worker)** | Jerárquico, dos niveles | El Manager (nivel alto) fija metas de throughput/espera por zona cada 20 pasos; el Worker (nivel bajo) controla cada semáforo para alcanzarlas. Ambos se entrenan con PPO. |
 | **Fijo / Aleatorio** | Baselines | Ciclo de tiempo fijo y cambio aleatorio; referencia mínima de comparación. |
@@ -41,5 +40,5 @@ Los resultados se guardan en `rl/results/` y se visualizan en la página
 - Motor: C++20, CMake, memoria compartida POSIX.
 - Entorno RL: Python 3.12, Gymnasium, PettingZoo.
 - Redes: PyTorch (CPU).
-- Algoritmos base: Stable-Baselines3 (PPO, A2C).
+- Algoritmos base: Stable-Baselines3 (PPO).
 - Dashboard: FastAPI + WebSockets + Three.js.
