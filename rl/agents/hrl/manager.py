@@ -43,20 +43,25 @@ class ManagerNetwork(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
         )
-        self.goal_head  = nn.Linear(hidden_dim, GOAL_DIM)   # mean of the goal policy
         self.value_head = nn.Linear(hidden_dim, 1)
-        # The Manager is a stochastic Gaussian policy over goals: it must EXPLORE
-        # different goals and learn (via policy gradient) which ones lead to high
-        # zone reward. A learnable log-std gives that exploration. Previously the
-        # Manager was deterministic and "trained" by MSE against its own output,
-        # so it had no learning signal at all and never improved its goals.
-        self.log_std    = nn.Parameter(torch.full((GOAL_DIM,), -0.7))  # σ≈0.5
+        # Beta distribution heads: goals live strictly in [0,1] so Beta is the
+        # natural choice. A Gaussian + clamp creates artificial probability mass
+        # at the boundaries (0 and 1) that corrupts the policy gradient — values
+        # that would have been sampled past the boundary all collapse to 0 or 1,
+        # but the log_prob is evaluated as if they came from the smooth interior
+        # of the distribution. Beta(α,β) with α,β>1 is smooth on (0,1) with no
+        # boundary mass and requires no clamping.
+        self.alpha_head = nn.Linear(hidden_dim, GOAL_DIM)
+        self.beta_head  = nn.Linear(hidden_dim, GOAL_DIM)
 
-    def forward(self, zone_feats: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        h      = self.zone_encoder(zone_feats)        # (Z, hidden)
-        mean   = torch.sigmoid(self.goal_head(h))     # (Z, GOAL_DIM) mean in [0,1]
-        values = self.value_head(h).squeeze(-1)       # (Z,)
-        return mean, values
+    def forward(self, zone_feats: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        h      = self.zone_encoder(zone_feats)                    # (Z, hidden)
+        # softplus keeps α,β > 0; +1 keeps them > 1 so the Beta mode is in the
+        # interior of (0,1) and the distribution is unimodal from the start.
+        alpha  = F.softplus(self.alpha_head(h)) + 1.0             # (Z, GOAL_DIM)
+        beta   = F.softplus(self.beta_head(h))  + 1.0             # (Z, GOAL_DIM)
+        values = self.value_head(h).squeeze(-1)                   # (Z,)
+        return alpha, beta, values
 
 
 def aggregate_zones(state: StateSnapshot, num_zones: int) -> np.ndarray:
@@ -178,9 +183,8 @@ class HRLManager:
 
         total_loss = 0.0
         for _ in range(self.cfg.n_epochs):
-            mean, values = self._net(zone_feats_t)          # (T, Z, GOAL_DIM), (T, Z)
-            std  = self._net.log_std.exp()
-            dist = torch.distributions.Normal(mean, std)
+            alpha, beta, values = self._net(zone_feats_t)   # (T, Z, GOAL_DIM), (T, Z)
+            dist = torch.distributions.Beta(alpha, beta)
             # log-prob of the goals that were actually sampled and executed
             log_probs = dist.log_prob(goals_t).sum(-1)      # (T, Z)
             entropy   = dist.entropy().sum(-1)               # (T, Z)
@@ -211,9 +215,7 @@ class HRLManager:
         zone_feats = aggregate_zones(state, self.num_zones)  # (Z, 5)
         feats_t    = torch.tensor(zone_feats, dtype=torch.float32)
         with torch.no_grad():
-            mean, _ = self._net(feats_t)
-            std     = self._net.log_std.exp()
-            # Sample goals so the Manager explores; clamp back into the valid [0,1]
-            # range the Worker's reward shaping expects.
-            goals_t = torch.normal(mean, std).clamp(0.0, 1.0)
+            alpha, beta, _ = self._net(feats_t)
+            # Beta samples are always in (0,1) — no clamping needed.
+            goals_t = torch.distributions.Beta(alpha, beta).sample()
         return goals_t.numpy()   # (Z, GOAL_DIM)

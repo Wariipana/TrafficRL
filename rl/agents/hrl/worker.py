@@ -146,10 +146,12 @@ def goal_reward_shaping(
         actual_tp   = np.clip(s.throughput / 50.0, 0, 1)
         actual_wait = np.clip(s.avg_wait_time / 600.0, 0, 1)
 
-        tp_progress   = actual_tp - target_tp         # positive = exceeding goal
-        wait_progress = target_wait - actual_wait     # positive = below target wait
+        # Penalise distance to goal: Worker is rewarded for being *close* to the
+        # target, not for exceeding it (which would let it ignore Manager goals).
+        tp_penalty   = -abs(actual_tp   - target_tp)
+        wait_penalty = -abs(actual_wait - target_wait)
 
-        intrinsic[i] = weight * (0.5 * tp_progress + 0.5 * wait_progress)
+        intrinsic[i] = weight * (0.5 * tp_penalty + 0.5 * wait_penalty)
 
     return intrinsic
 

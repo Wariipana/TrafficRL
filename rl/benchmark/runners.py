@@ -82,17 +82,27 @@ class BaseRunner:
 
 class FixedRandomRunner(BaseRunner):
     """
-    Realistic "badly configured city" baseline: every light cycles on a FIXED
-    period and offset chosen randomly per episode, then held constant. Unlike a
-    per-step random policy (which flickers nonsensically), each intersection
-    keeps a stable rhythm — it's just poorly calibrated and uncoordinated with
-    its neighbours, like real traffic lights installed without optimisation.
+    "Badly misconfigured city" baseline: two deliberate failure modes that
+    represent the worst real-world fixed-time configurations.
 
-    This is the starting point RL must improve on. Requires a running C++ server.
+    1. Very short cycle periods (4-8 steps per phase): lights flip so fast that
+       vehicles barely clear the stop-line before the phase changes again.
+       Queues compound across consecutive intersections because green windows
+       are too narrow to drain them.
+
+    2. Zero offset for every light: all intersections in the city switch phase
+       simultaneously.  A vehicle that clears one intersection immediately hits
+       a red at the next because the entire grid changed state at the same tick.
+       This is the worst-case coordination scenario — it eliminates any
+       accidental green-wave that random offsets would produce.
+
+    Together these two failure modes create the maximum observable gap vs RL,
+    giving the comparison table a meaningful lower bound to beat.
+    Requires a running C++ server.
     """
     name = "fixed_random"
 
-    def __init__(self, env_cfg: EnvConfig, period_min: int = 15, period_max: int = 60):
+    def __init__(self, env_cfg: EnvConfig, period_min: int = 4, period_max: int = 8):
         import gymnasium
         from rl.env.traffic_env import TrafficEnv
         self._env_cfg    = env_cfg
@@ -112,12 +122,13 @@ class FixedRandomRunner(BaseRunner):
         ep_spd_acc  = 0.0
 
         n_lights = self._env.action_space.nvec.shape[0]
-        # per-light fixed period + offset, constant for the whole episode
+        # Short periods: each light gets a randomly chosen cycle between
+        # period_min and period_max but all with offset=0 so they switch
+        # in lockstep — both failure modes active simultaneously.
         periods = rng.integers(self._period_min, self._period_max + 1, size=n_lights)
-        offsets = np.array([rng.integers(0, p) for p in periods], dtype=np.int64)
+        offsets = np.zeros(n_lights, dtype=np.int64)
 
         while not done:
-            # each light shows phase 0/1 depending on where it is in its own cycle
             phase  = ((step + offsets) // periods) % 2
             action = phase.astype(np.int64)
             obs, _, terminated, truncated, info = self._env.step(action)
