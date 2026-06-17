@@ -24,10 +24,14 @@ dist/
 *.swp
 *.swo
 
-# Models / logs
+# Saved-model artefacts & logs (but NOT rl/models/*.py — that's source code:
+# gnn.py, __init__.py define the GNN architecture used by IPPO/HRL).
 rl/runs/
-rl/models/
-*.zip
+rl/results/
+rl/models/*/
+rl/models/*.pt
+rl/models/*.zip
+rl/models/*.pkl
 *.pkl
 tensorboard_logs/
 

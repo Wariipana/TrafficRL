@@ -117,7 +117,7 @@ echo; echo "──[benchmark] Evaluando los 3 modelos vs baselines ────�
   --ippo-model  rl/models/ippo_gnn.pt \
   --hrl-worker  rl/models/hrl/worker.pt \
   --hrl-manager rl/models/hrl/manager.pt \
-  --reference fixed_time \
+  --reference fixed_random \
   || echo "[train_all] (benchmark falló; los modelos sí quedaron guardados)"
 
 echo
