@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--mock",         action="store_true",
                    help="Use synthetic data — no C++ server required")
     p.add_argument("--reference",    default="fixed_random",
-                   help="Reference algorithm for % improvement column")
+                   help="Reference algorithm for %% improvement column")
     return p.parse_args()
 
 
