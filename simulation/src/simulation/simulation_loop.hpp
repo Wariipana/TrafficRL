@@ -73,6 +73,23 @@ private:
     uint64_t rng_          = 42;
     EventConfig event_cfg_;
 
+    // ---- Throughput accounting ----
+    // Two related signals, both reset and recounted each step in check_spawn_despawn():
+    //
+    //  * GLOBAL throughput = trips completed this step (a vehicle reached its
+    //    destination gateway and despawned). This is the "real" throughput the
+    //    reward's global term and the benchmark want. The previous code used
+    //    active_vehicles*0.1 as a placeholder, which made the agent maximise the
+    //    number of cars IN the city (more congestion) instead of cars CLEARED.
+    //
+    //  * PER-NODE throughput = vehicles that crossed each intersection this step.
+    //    Trip completion only ever happens at border gateways, so it is useless as
+    //    a per-junction signal; crossings are the flow an interior agent actually
+    //    controls, so the local reward term uses this.
+    uint32_t              trips_completed_step_ = 0;   // trips finished this step (global)
+    uint64_t              trips_total_          = 0;   // trips finished this episode
+    std::vector<uint32_t> crossings_by_node_;          // crossings per node this step (size = node_count)
+
     // Per-step pipeline
     void update_vehicles();
     void update_traffic_lights();

@@ -28,6 +28,7 @@ SimulationLoop::SimulationLoop(const CityConfig&  city_cfg,
 {
     std::vector<uint32_t> light_nodes(city_.light_ids().begin(), city_.light_ids().end());
     lights_.init(light_nodes);
+    crossings_by_node_.assign(city_.node_count(), 0);
 }
 
 void SimulationLoop::reset(uint64_t seed, int warmup_steps) {
@@ -41,6 +42,9 @@ void SimulationLoop::reset(uint64_t seed, int warmup_steps) {
     sim_time_   = 0.0f;
     terminated_ = false;
     truncated_  = false;
+    trips_completed_step_ = 0;
+    trips_total_          = 0;
+    std::fill(crossings_by_node_.begin(), crossings_by_node_.end(), 0u);
 
     // Warm the city up to a steady traffic level before the episode starts. We run
     // the normal per-step pipeline (spawning, IDM, junction logic) but let the
@@ -97,6 +101,13 @@ void SimulationLoop::rebuild_spatial_hash() {
 
 void SimulationLoop::check_spawn_despawn() {
     const uint32_t E = city_.edge_count();
+
+    // Reset this step's throughput counters. A trip (global) is counted below when
+    // a vehicle despawns specifically because it reached its destination (not the
+    // unreachable-route safeguard); a crossing (per-node) is counted when a vehicle
+    // clears an intersection into its next segment.
+    trips_completed_step_ = 0;
+    std::fill(crossings_by_node_.begin(), crossings_by_node_.end(), 0u);
 
     // Position of the vehicle closest to the entry (position 0) of each
     // (segment, lane). A new entry is only admitted if this is >= VEHICLE_LENGTH
@@ -162,8 +173,12 @@ void SimulationLoop::check_spawn_despawn() {
         const RoadSegment& seg = city_.edge(v.segment_id);
         if (v.position < seg.length) continue;
 
-        // Reached the destination border node → leave the map.
+        // Reached the destination border node → leave the map. This is a completed
+        // trip: count it for global throughput. (The per-node crossing was already
+        // counted when it cleared this node into the final segment, below.)
         if (seg.to_node == v.dest_node) {
+            ++trips_completed_step_;
+            ++trips_total_;
             to_despawn.push_back(v.id);
             continue;
         }
@@ -194,6 +209,12 @@ void SimulationLoop::check_spawn_despawn() {
         }
         reserve_entry(next, v.lane);
         reserve_crossing(seg.to_node, seg.direction);
+        // This vehicle just cleared seg.to_node into the next segment: count it as
+        // a crossing of that intersection this step. This per-node throughput is the
+        // local signal the reward uses — the share of traffic an agent let flow
+        // THROUGH its junction, which it directly controls (unlike trip completion,
+        // which only ever happens at border gateways).
+        if (seg.to_node < crossings_by_node_.size()) ++crossings_by_node_[seg.to_node];
         // Remember the segment/lane we are leaving so update_world_position can
         // draw a curved arc through the junction instead of teleporting the centre.
         v.prev_segment_id = v.segment_id;
@@ -740,6 +761,9 @@ void SimulationLoop::compute_intersection_state(uint32_t light_idx, Intersection
 
     out.num_lanes     = static_cast<uint8_t>(lane_idx);
     out.avg_wait_time = (total_count > 0) ? total_wait / total_count : 0.0f;
+    // Per-intersection throughput: vehicles that crossed this node this step.
+    out.throughput    = (tl.node_id < crossings_by_node_.size())
+        ? static_cast<float>(crossings_by_node_[tl.node_id]) : 0.0f;
 }
 
 void SimulationLoop::compute_global_metrics(GlobalMetrics& out) const {
@@ -767,9 +791,12 @@ void SimulationLoop::compute_global_metrics(GlobalMetrics& out) const {
     out.congestion_spread = (city_.edge_count() > 0)
         ? static_cast<float>(congested) / city_.edge_count()
         : 0.0f;
-    out.total_throughput  = events_.total_events_fired() > 0
-        ? out.active_vehicles * 0.1f  // rough proxy for phase 1/2
-        : out.active_vehicles * 0.1f;
+    // Real throughput: vehicles that completed their trip (reached destination and
+    // despawned) during this step. The reward and benchmark accumulate this per
+    // step, so it must be the per-step count — not active_vehicles, which rewarded
+    // filling the city instead of clearing it.
+    out.total_throughput  = static_cast<float>(trips_completed_step_);
+    out.completed_trips   = static_cast<uint32_t>(trips_total_);
 }
 
 void SimulationLoop::snapshot(SimStateBuffer& buf) const {

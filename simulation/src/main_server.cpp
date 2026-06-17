@@ -18,7 +18,7 @@ static void print_usage(const char* prog) {
     std::printf("  --seed   S   city seed   (default 42)\n");
     std::printf("  --steps  N   episode length in steps (default 2000)\n");
     std::printf("  --prefix P   shm prefix (default trafficrl)\n");
-    std::printf("  --warmup K   steps to pre-fill the city on each reset (default 300)\n");
+    std::printf("  --warmup K   steps to pre-fill the city on each reset (default 1000)\n");
 }
 
 int main(int argc, char** argv) {
@@ -33,7 +33,12 @@ int main(int argc, char** argv) {
     int   episode_steps = 2000;
     float dt            = 0.1f;
     float spawn_mult    = 1.0f;   // scales the base spawn rates (traffic density)
-    int   warmup_steps  = 300;    // steps run on each reset to pre-fill the city
+    int   warmup_steps  = 1000;   // steps run on each reset to pre-fill the city.
+                                  // Measured: the 4x4 grid keeps filling roughly
+                                  // linearly until ~1000-1200 steps before the
+                                  // inflow/outflow balance saturates (~80-100
+                                  // vehicles); 300 left the city at ~25% load and
+                                  // the episode trained on the fill-up transient.
     std::string prefix  = "trafficrl";
 
     for (int i = 1; i < argc; ++i) {
