@@ -119,6 +119,7 @@ class EnvConfig:
 
     @classmethod
     def from_yaml(cls, path: str) -> "EnvConfig":
+        import os
         import yaml
         with open(path) as f:
             raw = yaml.safe_load(f)
@@ -127,6 +128,10 @@ class EnvConfig:
         sim_raw    = raw.get("simulation", {})
         city   = CityConfig(**{k: v for k, v in city_raw.items()   if hasattr(CityConfig(), k)})
         reward = RewardConfig(**{k: v for k, v in reward_raw.items() if hasattr(RewardConfig(), k)})
+        # The shared-memory prefix must match the C++ server's --prefix. An env var
+        # lets launch scripts give each run a unique prefix so concurrent servers
+        # (e.g. a training run alongside the dashboard) don't collide on /dev/shm.
+        shm_prefix = os.environ.get("TRAFFICRL_SHM_PREFIX") or raw.get("shm_prefix", "trafficrl")
         return cls(
             city=city,
             reward=reward,
@@ -134,5 +139,5 @@ class EnvConfig:
             communication_mode=raw.get("communication_mode", "none"),
             episode_length_steps=sim_raw.get("episode_length_steps", 2000),
             dt=sim_raw.get("dt", 0.1),
-            shm_prefix=raw.get("shm_prefix", "trafficrl"),
+            shm_prefix=shm_prefix,
         )

@@ -14,6 +14,8 @@ Requires the C++ sim server running (it creates the shared memory the env reads)
 from __future__ import annotations
 
 import asyncio
+import glob
+import json
 import os
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -61,11 +63,9 @@ def algorithms() -> JSONResponse:
     # value = key passed to /api/start; label = what the dropdown shows
     labels = {
         "ppo": "PPO centralizado (RL)",
-        "a2c": "A2C (RL)",
         "ippo_gnn": "IPPO + GNN · multi-agente (RL)",
         "hrl": "HRL jerárquico · Manager-Worker (RL)",
-        "fixed_time": "Tiempo fijo (baseline)",
-        "random": "Aleatorio (baseline)",
+        "fixed_random": "Semáforos mal configurados (baseline)",
     }
     return JSONResponse({
         "algorithms": [{"value": a, "label": labels.get(a, a)}
@@ -150,6 +150,37 @@ async def run_model(payload: dict) -> JSONResponse:
         return JSONResponse({"ok": True})
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+# ---- Comparison page: read benchmark reports written to rl/results/ ----
+
+RESULTS_DIR = "rl/results"
+
+
+@app.get("/compare")
+def compare_page() -> HTMLResponse:
+    with open(os.path.join(STATIC_DIR, "compare.html"), encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+
+
+@app.get("/api/results")
+def results() -> JSONResponse:
+    """Return every benchmark JSON in rl/results/ (one per config), each holding
+    the per-algorithm summary + episodes produced by rl.training.benchmark."""
+    out = []
+    for path in sorted(glob.glob(os.path.join(RESULTS_DIR, "benchmark_*.json"))):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            out.append({
+                "file": os.path.basename(path),
+                "config": os.path.basename(path)[len("benchmark_"):-len(".json")],
+                "mtime": os.path.getmtime(path),
+                "algorithms": data,
+            })
+        except Exception:
+            continue
+    return JSONResponse({"results": out})
 
 
 @app.websocket("/ws")

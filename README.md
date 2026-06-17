@@ -60,6 +60,12 @@ WSL2 reenvía el puerto). Desde el panel puedes elegir algoritmo y parámetros,
 iniciar/pausar/parar el entrenamiento y ver la ciudad en 3D con métricas en vivo.
 `Ctrl+C` en la terminal detiene el motor y el dashboard.
 
+La página **Comparar** (`http://localhost:8200/compare`, enlace en la cabecera)
+muestra una tabla con los resultados del benchmark de cada algoritmo —espera
+media, throughput, congestión, velocidad y % de mejora frente al semáforo de
+tiempo fijo—. Se llena con los reportes de `rl/results/` que genera
+`train_all.sh` o el benchmark por CLI.
+
 ## Algoritmos de RL
 
 | Algoritmo            | Descripción                                            |
@@ -70,13 +76,42 @@ iniciar/pausar/parar el entrenamiento y ver la ciudad en 3D con métricas en viv
 | HRL (Manager-Worker) | Jerárquico: el Manager fija metas por zona al Worker.  |
 | Fijo / Aleatorio     | Baselines sin aprendizaje, para comparar.              |
 
+## Entrenar por consola
+
+La forma más simple: entrenar los tres algoritmos RL en secuencia, guardando
+cada modelo automáticamente. Arranca el motor C++ por su cuenta y limpia al final
+(usa un prefijo de memoria compartida propio, así que puede correr a la vez que el
+dashboard sin chocar). Al terminar corre el benchmark y deja los reportes en
+`rl/results/` (visibles en la página **Comparar**):
+
+```bash
+bash scripts/train_all.sh                                  # 4x4, 300k pasos c/u
+bash scripts/train_all.sh --config config/city_small.yaml --steps 500000
+bash scripts/train_all.sh --bench-episodes 30              # más episodios de eval
+```
+
+Modelos resultantes en `rl/models/`:
+
+| Algoritmo  | Archivos                                       |
+|------------|------------------------------------------------|
+| PPO        | `ppo_centralized.zip` + `ppo_centralized_vecnorm.pkl` |
+| IPPO + GNN | `ippo_gnn.pt`                                  |
+| HRL        | `hrl/worker.pt` + `hrl/manager.pt`             |
+
+### O cada algoritmo por separado
+
+Requieren un `trafficrl_server` ya corriendo (p. ej. `bash scripts/run.sh` en otra
+terminal, o el propio `train_all.sh`). Cada uno guarda su modelo automáticamente:
+
+```bash
+.venv/bin/python -m rl.training.train       --config config/city_small.yaml --steps 300000
+.venv/bin/python -m rl.training.train_ippo  --config config/city_small.yaml --steps 300000
+.venv/bin/python -m rl.training.train_hrl   --config config/city_small.yaml --steps 300000
+```
+
 ## Comandos útiles
 
 ```bash
-# Entrenar por CLI (sin dashboard; requiere el server C++ corriendo)
-.venv/bin/python -m rl.training.train      --config config/city_small.yaml --steps 300000
-.venv/bin/python -m rl.training.train_hrl  --config config/city_small.yaml --steps 300000
-
 # Benchmark comparativo entre algoritmos
 .venv/bin/python -m rl.training.benchmark  --config config/city_small.yaml --episodes 30
 
@@ -84,7 +119,7 @@ iniciar/pausar/parar el entrenamiento y ver la ciudad en 3D con métricas en viv
 .venv/bin/python -m pytest tests/python/ -v
 ctest --test-dir simulation/build
 
-# Limpiar memoria compartida colgada
+# Limpiar memoria compartida colgada (prefijo opcional)
 bash scripts/cleanup_shm.sh
 ```
 
@@ -95,6 +130,6 @@ simulation/   motor de simulación en C++ (CMake) + servidor standalone
 rl/           entorno Gymnasium/PettingZoo, agentes RL, benchmark
 webviz/       dashboard web (FastAPI + Three.js)
 config/       configuraciones de ciudad (YAML)
-scripts/      setup_wsl.sh, run.sh, cleanup_shm.sh
+scripts/      setup_wsl.sh, run.sh, train_all.sh, cleanup_shm.sh
 tests/        tests C++ y Python
 ```

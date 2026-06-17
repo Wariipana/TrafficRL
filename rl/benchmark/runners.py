@@ -68,58 +68,26 @@ class BaseRunner:
         pass
 
 
-# ---- Fixed-time baseline (no server needed if env is injected) ----
+# ---- Misconfigured fixed-time baseline ----
 
-class FixedTimeRunner(BaseRunner):
+class FixedRandomRunner(BaseRunner):
     """
-    Alternates NS_GREEN / EW_GREEN every `cycle_steps` steps.
-    Requires a running C++ server.
-    """
-    name = "fixed_time"
+    Realistic "badly configured city" baseline: every light cycles on a FIXED
+    period and offset chosen randomly per episode, then held constant. Unlike a
+    per-step random policy (which flickers nonsensically), each intersection
+    keeps a stable rhythm — it's just poorly calibrated and uncoordinated with
+    its neighbours, like real traffic lights installed without optimisation.
 
-    def __init__(self, env_cfg: EnvConfig, cycle_steps: int = 30):
+    This is the starting point RL must improve on. Requires a running C++ server.
+    """
+    name = "fixed_random"
+
+    def __init__(self, env_cfg: EnvConfig, period_min: int = 15, period_max: int = 60):
         import gymnasium
         from rl.env.traffic_env import TrafficEnv
-        self._env_cfg     = env_cfg
-        self._cycle_steps = cycle_steps
-        self._env = gymnasium.wrappers.FlattenObservation(TrafficEnv(env_cfg))
-
-    def _run_one_episode(self, seed: int) -> EpisodeMetrics:
-        obs, _ = self._env.reset(seed=seed)
-        done   = False
-        step   = 0
-        ep_max_wait = 0.0
-        ep_tp_acc   = 0.0
-        last_info: dict = {}
-
-        n_lights = self._env.action_space.nvec.shape[0]
-
-        while not done:
-            phase  = (step // self._cycle_steps) % 2
-            action = np.full(n_lights, phase, dtype=np.int64)
-            obs, _, terminated, truncated, info = self._env.step(action)
-            done = terminated or truncated
-            step += 1
-            ep_max_wait  = max(ep_max_wait, info.get("max_wait_global", 0.0))
-            ep_tp_acc   += info.get("total_throughput", 0.0)
-            last_info    = info
-
-        state = self._env.unwrapped._last_state
-        return _snapshot_to_episode_metrics(state, seed, step, ep_max_wait, ep_tp_acc)
-
-    def close(self) -> None:
-        self._env.close()
-
-
-# ---- Random policy baseline ----
-
-class RandomRunner(BaseRunner):
-    """Uniformly random actions — sets a lower bound on performance."""
-    name = "random"
-
-    def __init__(self, env_cfg: EnvConfig):
-        import gymnasium
-        from rl.env.traffic_env import TrafficEnv
+        self._env_cfg    = env_cfg
+        self._period_min = period_min
+        self._period_max = period_max
         self._env = gymnasium.wrappers.FlattenObservation(TrafficEnv(env_cfg))
 
     def _run_one_episode(self, seed: int) -> EpisodeMetrics:
@@ -130,8 +98,15 @@ class RandomRunner(BaseRunner):
         ep_max_wait = 0.0
         ep_tp_acc   = 0.0
 
+        n_lights = self._env.action_space.nvec.shape[0]
+        # per-light fixed period + offset, constant for the whole episode
+        periods = rng.integers(self._period_min, self._period_max + 1, size=n_lights)
+        offsets = np.array([rng.integers(0, p) for p in periods], dtype=np.int64)
+
         while not done:
-            action = self._env.action_space.sample()
+            # each light shows phase 0/1 depending on where it is in its own cycle
+            phase  = ((step + offsets) // periods) % 2
+            action = phase.astype(np.int64)
             obs, _, terminated, truncated, info = self._env.step(action)
             done = terminated or truncated
             step += 1

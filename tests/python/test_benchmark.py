@@ -231,16 +231,16 @@ class TestReportGeneration:
     def _make_results(self):
         rng = np.random.default_rng(99)
         return {
-            "fixed_time": _make_result("fixed_time", rng.normal(70, 8, 15)),
-            "ppo":        _make_result("ppo",        rng.normal(45, 5, 15)),
-            "ippo_gnn":   _make_result("ippo_gnn",   rng.normal(38, 4, 15)),
+            "fixed_random": _make_result("fixed_random", rng.normal(70, 8, 15)),
+            "ppo":          _make_result("ppo",          rng.normal(45, 5, 15)),
+            "ippo_gnn":     _make_result("ippo_gnn",     rng.normal(38, 4, 15)),
         }
 
     def test_print_summary_no_crash(self, capsys):
         results = self._make_results()
-        print_summary_table(results, reference="fixed_time")
+        print_summary_table(results, reference="fixed_random")
         out = capsys.readouterr().out
-        assert "fixed_time" in out
+        assert "fixed_random" in out
         assert "ppo" in out
 
     def test_print_ci_no_crash(self, capsys):
@@ -263,7 +263,7 @@ class TestReportGeneration:
             assert os.path.exists(path)
             with open(path) as f:
                 content = f.read()
-            assert "fixed_time" in content
+            assert "fixed_random" in content
             assert "mean_wait_s" in content
 
     def test_save_json_structure(self):
@@ -273,9 +273,9 @@ class TestReportGeneration:
             save_json(results, path)
             with open(path) as f:
                 data = json.load(f)
-        assert "fixed_time" in data
-        assert "summary" in data["fixed_time"]
-        assert "episodes" in data["fixed_time"]
+        assert "fixed_random" in data
+        assert "summary" in data["fixed_random"]
+        assert "episodes" in data["fixed_random"]
         assert "_pairwise_stats" in data
 
     def test_json_pairwise_count(self):
@@ -311,13 +311,13 @@ class TestMockBenchmark:
             config     = "config/city_small.yaml"
             episodes   = 10
             mock       = True
-            reference  = "fixed_time"
+            reference  = "fixed_random"
             output_dir = "/tmp/trafficrl_test_bench"
 
         from rl.training.benchmark import _run_mock_benchmark
         results = _run_mock_benchmark(Args())
-        assert len(results) == 5
-        assert "fixed_time" in results
+        assert len(results) == 4
+        assert "fixed_random" in results
         assert "hrl" in results
 
     def test_mock_hrl_better_than_fixed(self):
@@ -325,12 +325,12 @@ class TestMockBenchmark:
             config     = "config/city_small.yaml"
             episodes   = 30
             mock       = True
-            reference  = "fixed_time"
+            reference  = "fixed_random"
             output_dir = "/tmp/trafficrl_test_bench"
 
         from rl.training.benchmark import _run_mock_benchmark
         results = _run_mock_benchmark(Args())
-        assert results["hrl"].mean_wait < results["fixed_time"].mean_wait
+        assert results["hrl"].mean_wait < results["fixed_random"].mean_wait
 
     def test_mock_full_pipeline_no_crash(self, capsys):
         """End-to-end: mock data → reports."""
@@ -338,7 +338,7 @@ class TestMockBenchmark:
             config     = "config/city_small.yaml"
             episodes   = 20
             mock       = True
-            reference  = "fixed_time"
+            reference  = "fixed_random"
             output_dir = "/tmp/trafficrl_test_bench_full"
 
         from rl.training.benchmark import _run_mock_benchmark

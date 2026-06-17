@@ -552,7 +552,10 @@ async function loadModelList() {
     const { models } = await (await fetch("/api/models")).json();
     const sel = $("model-select");
     sel.innerHTML = models.length
-      ? models.map(m => `<option value="${m.name}">${m.name}</option>`).join("")
+      ? models.map(function (m) {
+          const tag = m.algo ? ` (${m.algo})` : "";
+          return `<option value="${m.name}">${m.name}${tag}</option>`;
+        }).join("")
       : '<option value="">— sin modelos —</option>';
     $("btn-infer").disabled = models.length === 0;
   } catch (e) {}

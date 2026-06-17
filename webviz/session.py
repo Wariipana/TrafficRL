@@ -52,7 +52,7 @@ class Metrics:
 @dataclass
 class SessionStatus:
     state: str = "idle"            # idle | running | paused | stopped | error
-    algo: str = "ppo"              # active algorithm (ppo|a2c|ippo_gnn|hrl|fixed_time|random)
+    algo: str = "ppo"              # active algorithm (ppo|ippo_gnn|hrl|fixed_random)
     total_timesteps: int = 0
     current_step: int = 0
     speed_hz: float = 30.0         # target steps/second (0 = unthrottled)
@@ -102,15 +102,14 @@ class TrainingSession:
     # ---- public control surface (called from FastAPI handlers) ----
 
     # Algorithms the dashboard can launch:
-    #   ppo / a2c        — SB3 learners over the centralized (flattened) env
-    #   ippo_gnn         — Independent PPO with a GNN comm channel (rl.agents.marl)
-    #   hrl              — hierarchical Manager + Worker (rl.agents.hrl)
-    #   fixed_time/random— rule-based baselines (no learning) for comparison
-    # ippo_gnn and hrl are hand-written PyTorch loops driven over MARLTrafficEnv;
-    # the SB3 learners and baselines run over the centralized TrafficEnv. DQN is
-    # intentionally absent: the centralized action space is MultiDiscrete and
-    # SB3's DQN only supports a single Discrete action.
-    ALGORITHMS = ("ppo", "a2c", "ippo_gnn", "hrl", "fixed_time", "random")
+    #   ppo          — SB3 PPO over the centralized (flattened) env
+    #   ippo_gnn     — Independent PPO with a GNN comm channel (rl.agents.marl)
+    #   hrl          — hierarchical Manager + Worker (rl.agents.hrl)
+    #   fixed_random — "badly configured city" baseline (no learning); the
+    #                  realistic starting point RL must beat in the benchmark
+    # ippo_gnn and hrl are hand-written PyTorch loops over MARLTrafficEnv; ppo and
+    # the baseline run over the centralized TrafficEnv.
+    ALGORITHMS = ("ppo", "ippo_gnn", "hrl", "fixed_random")
 
     def start(self, config_path: str, total_timesteps: int, algo: str = "ppo",
               params: dict | None = None) -> None:
@@ -199,9 +198,8 @@ class TrainingSession:
         with self._lock:
             if self.status.state in ("running", "paused", "inference"):
                 raise RuntimeError("Ya hay una sesión en curso")
-            safe = "".join(c for c in model_name if c.isalnum() or c in "-_")
-            model_dir = os.path.join(self.MODELS_DIR, safe)
-            if not os.path.exists(os.path.join(model_dir, "model.zip")):
+            det = self.detect_model(model_name)
+            if det is None:
                 raise RuntimeError(f"Modelo no encontrado: {model_name}")
             self._pause_evt.clear()
             self._stop_evt.clear()
@@ -217,75 +215,180 @@ class TrainingSession:
                 speed_hz=self._speed_hz,
                 config_path=config_path,
             )
+            self.status.algo = det["algo"]
             self._thread = threading.Thread(
-                target=self._run_inference, args=(model_dir, config_path), daemon=True
+                target=self._run_inference, args=(det, config_path), daemon=True
             )
             self._thread.start()
 
-    def _run_inference(self, model_dir: str, config_path: str) -> None:
+    def _run_inference(self, det: dict, config_path: str) -> None:
+        """Drive the lights with a saved model. Dispatches by algorithm: SB3/PPO
+        over the centralized env, IPPO+GNN / HRL over the MARL env."""
         try:
-            from rl.agents.centralized.ppo_agent import load_model
-            cfg = EnvConfig.from_yaml(config_path)
-            env_raw = TrafficEnv(cfg)
-            self._graph = env_raw._graph
-            self._bridge_ref = env_raw._bridge
-
-            def _make():
-                return gymnasium.wrappers.FlattenObservation(env_raw)
-
-            venv = DummyVecEnv([_make])
-            vnpath = os.path.join(model_dir, "vecnorm.pkl")
-            if os.path.exists(vnpath):
-                venv = VecNormalize.load(vnpath, venv)
-                venv.training = False          # freeze stats; just normalise
-                venv.norm_reward = False
-            model = load_model(os.path.join(model_dir, "model"), venv)
-
-            last_wall = time.perf_counter()
-            obs = venv.reset()
-            while not self._stop_evt.is_set():
-                while self._pause_evt.is_set():
-                    if self._stop_evt.is_set():
-                        break
-                    time.sleep(0.05)
-                if self._stop_evt.is_set():
-                    break
-                # throttle to target steps/second
-                hz = self._speed_hz
-                if hz > 0:
-                    target_dt = 1.0 / hz
-                    el = time.perf_counter() - last_wall
-                    if el < target_dt:
-                        time.sleep(target_dt - el)
-                now = time.perf_counter()
-                fps = 1.0 / max(now - last_wall, 1e-6)
-                last_wall = now
-
-                action, _ = model.predict(obs, deterministic=True)
-                obs, _, dones, _ = venv.step(action)
-
-                state = env_raw._last_state
-                if state is not None:
-                    m = Metrics(
-                        step=self.status.current_step + 1,
-                        sim_tick=int(state.sim_tick),
-                        episode_step=int(state.episode_step),
-                        reward=0.0,
-                        avg_wait=round(float(state.avg_wait_global), 3),
-                        max_wait=round(float(state.max_wait_global), 3),
-                        throughput=round(float(state.total_throughput), 3),
-                        congestion=round(float(state.congestion_spread), 4),
-                        num_vehicles=int(state.num_vehicles),
-                        fps=round(fps, 1),
-                    )
-                    self.publish_frame(state, m)
+            algo = det["algo"]
+            if algo == "ppo":
+                self._infer_sb3(det, config_path)
+            elif algo == "ippo_gnn":
+                self._infer_ippo(det, config_path)
+            elif algo == "hrl":
+                self._infer_hrl(det, config_path)
+            else:
+                raise RuntimeError(f"Inferencia no soportada para algoritmo: {algo}")
             self.status.state = "stopped"
-            venv.close()
         except Exception as exc:
             import traceback
             traceback.print_exc()
             self.status.state = "error"
             self.status.error = f"{type(exc).__name__}: {exc}"
+
+    def _infer_sb3(self, det: dict, config_path: str) -> None:
+        from rl.agents.centralized.ppo_agent import load_model
+        cfg = EnvConfig.from_yaml(config_path)
+        env_raw = TrafficEnv(cfg)
+        self._graph = env_raw._graph
+        self._bridge_ref = env_raw._bridge
+
+        def _make():
+            return gymnasium.wrappers.FlattenObservation(env_raw)
+
+        venv = DummyVecEnv([_make])
+        # VecNormalize stats live next to the model: "<dir>/vecnorm.pkl" for
+        # dashboard saves, "<name>_vecnorm.pkl" for flat CLI saves.
+        model_base = det["model"]
+        for vnpath in (os.path.join(os.path.dirname(model_base), "vecnorm.pkl"),
+                       model_base + "_vecnorm.pkl"):
+            if os.path.exists(vnpath):
+                venv = VecNormalize.load(vnpath, venv)
+                venv.training = False          # freeze stats; just normalise
+                venv.norm_reward = False
+                break
+        model = load_model(model_base, venv)
+
+        last_wall = time.perf_counter()
+        obs = venv.reset()
+        while not self._stop_evt.is_set():
+            while self._pause_evt.is_set():
+                if self._stop_evt.is_set():
+                    break
+                time.sleep(0.05)
+            if self._stop_evt.is_set():
+                break
+            # throttle to target steps/second
+            hz = self._speed_hz
+            if hz > 0:
+                target_dt = 1.0 / hz
+                el = time.perf_counter() - last_wall
+                if el < target_dt:
+                    time.sleep(target_dt - el)
+            now = time.perf_counter()
+            fps = 1.0 / max(now - last_wall, 1e-6)
+            last_wall = now
+
+            action, _ = model.predict(obs, deterministic=True)
+            obs, _, dones, _ = venv.step(action)
+
+            state = env_raw._last_state
+            if state is not None:
+                m = Metrics(
+                    step=self.status.current_step + 1,
+                    sim_tick=int(state.sim_tick),
+                    episode_step=int(state.episode_step),
+                    reward=0.0,
+                    avg_wait=round(float(state.avg_wait_global), 3),
+                    max_wait=round(float(state.max_wait_global), 3),
+                    throughput=round(float(state.total_throughput), 3),
+                    congestion=round(float(state.congestion_spread), 4),
+                    num_vehicles=int(state.num_vehicles),
+                    fps=round(fps, 1),
+                )
+                self.publish_frame(state, m)
+        venv.close()
+
+    def _infer_ippo(self, det: dict, config_path: str) -> None:
+        """Drive the lights with a saved IPPO+GNN model over the MARL env."""
+        import torch
+        from rl.env.marl_env import MARLTrafficEnv
+        from rl.agents.marl.ippo_agent import IPPOActorCritic, flatten_obs
+        from rl.models.gnn import build_adjacency_mask
+
+        cfg = EnvConfig.from_yaml(config_path)
+        env = MARLTrafficEnv(cfg)
+        obs_d, _ = env.reset()
+        self._graph = env._graph
+        self._bridge_ref = env._bridge
+        n = env._graph.num_lights
+
+        model = IPPOActorCritic()
+        model.load_state_dict(torch.load(det["model"], map_location="cpu"))
+        model.eval()
+        adj = build_adjacency_mask(env._graph.light_node_ids, env._graph.edges, k_hops=1)
+
+        last_wall = time.perf_counter()
+        step = 0
+        while not self._stop_evt.is_set():
+            stop, fps, last_wall = self._marl_gate(last_wall)
+            if stop:
+                break
+            flat = torch.tensor(
+                np.stack([flatten_obs(obs_d[f"light_{i}"]) for i in range(n)]),
+                dtype=torch.float32)
+            with torch.no_grad():
+                actions, _, _ = model.get_action(flat, adj, deterministic=True)
+            action_dict = {f"light_{i}": int(actions[i]) for i in range(n)}
+            obs_d, _, _, _, _ = env.step(action_dict)
+            step += 1
+            self._publish_marl_step(env, step, 0.0, fps)
+            if not env.agents:
+                obs_d, _ = env.reset()
+        env.close()
+
+    def _infer_hrl(self, det: dict, config_path: str) -> None:
+        """Drive the lights with a saved HRL Manager + Worker over the MARL env."""
+        import torch
+        from rl.env.marl_env import MARLTrafficEnv
+        from rl.agents.hrl.worker import HRLWorkerActorCritic
+        from rl.agents.hrl.manager import HRLManager, ManagerConfig
+        from rl.agents.marl.ippo_agent import flatten_obs
+        from rl.models.gnn import build_adjacency_mask
+
+        cfg = EnvConfig.from_yaml(config_path)
+        env = MARLTrafficEnv(cfg)
+        obs_d, _ = env.reset()
+        self._graph = env._graph
+        self._bridge_ref = env._bridge
+        n = env._graph.num_lights
+        num_zones = min(8, max(1, n // 4))
+
+        worker = HRLWorkerActorCritic()
+        worker.load_state_dict(torch.load(det["worker"], map_location="cpu"))
+        worker.eval()
+        manager = HRLManager(ManagerConfig(), num_zones=num_zones)
+        manager.load(det["manager"])
+        adj = build_adjacency_mask(env._graph.light_node_ids, env._graph.edges, k_hops=1)
+
+        last_wall = time.perf_counter()
+        step = 0
+        while not self._stop_evt.is_set():
+            stop, fps, last_wall = self._marl_gate(last_wall)
+            if stop:
+                break
+            state = env._last_state
+            goals_np = manager.get_goals(state, step)
+            goals_per = np.stack([
+                goals_np[int(env._graph.light_node_ids[i]) % num_zones] for i in range(n)])
+            flat = torch.tensor(
+                np.stack([flatten_obs(obs_d[f"light_{i}"]) for i in range(n)]),
+                dtype=torch.float32)
+            goals_t = torch.tensor(goals_per, dtype=torch.float32)
+            with torch.no_grad():
+                actions, _, _ = worker.get_action(flat, goals_t, adj, deterministic=True)
+            action_dict = {f"light_{i}": int(actions[i]) for i in range(n)}
+            obs_d, _, _, _, _ = env.step(action_dict)
+            step += 1
+            self._publish_marl_step(env, step, 0.0, fps)
+            if not env.agents:
+                obs_d, _ = env.reset()
+        env.close()
 
     # ---- persistence ----
 
@@ -331,26 +434,80 @@ class TrainingSession:
             json.dump(run, f, indent=2, ensure_ascii=False)
         return out_dir
 
+    def detect_model(self, name: str) -> dict | None:
+        """Resolve a saved model into {algo, paths} by inspecting its files.
+
+        Supports both layouts:
+          - dashboard saves:  rl/models/<name>/  with model.zip | model.pt |
+                              worker.pt+manager.pt  (+ run.json giving 'algo')
+          - CLI saves:        rl/models/<name>.zip            (PPO)
+                              rl/models/<name>.pt             (IPPO)
+                              rl/models/<name>/worker.pt+manager.pt  (HRL)
+        Returns None if nothing recognisable is found.
+        """
+        base = self.MODELS_DIR
+        safe = "".join(c for c in name if c.isalnum() or c in "-_")
+        d = os.path.join(base, safe)
+
+        # Prefer the explicit algo from run.json when present (dashboard saves).
+        declared = None
+        rj = os.path.join(d, "run.json")
+        if os.path.exists(rj):
+            try:
+                with open(rj, encoding="utf-8") as f:
+                    declared = (json.load(f).get("algo") or "").lower()
+            except Exception:
+                declared = None
+
+        # --- directory layouts ---
+        if os.path.isdir(d):
+            worker, manager = os.path.join(d, "worker.pt"), os.path.join(d, "manager.pt")
+            if os.path.exists(worker) and os.path.exists(manager):
+                return {"algo": "hrl", "worker": worker, "manager": manager}
+            if os.path.exists(os.path.join(d, "model.zip")):
+                return {"algo": "ppo", "model": os.path.join(d, "model")}
+            if os.path.exists(os.path.join(d, "model.pt")):
+                return {"algo": declared or "ippo_gnn", "model": os.path.join(d, "model.pt")}
+
+        # --- flat-file layouts (CLI / train_all.sh) ---
+        if os.path.exists(os.path.join(base, safe + ".zip")):
+            return {"algo": "ppo", "model": os.path.join(base, safe)}  # SB3 adds .zip
+        if os.path.exists(os.path.join(base, safe + ".pt")):
+            return {"algo": "ippo_gnn", "model": os.path.join(base, safe + ".pt")}
+        return None
+
     def list_models(self) -> list[dict]:
-        """List saved models (name + brief summary) for the inference selector."""
+        """List saved models runnable in inference, across both file layouts."""
         out: list[dict] = []
         base = self.MODELS_DIR
         if not os.path.isdir(base):
             return out
-        for name in sorted(os.listdir(base)):
-            d = os.path.join(base, name)
-            rj = os.path.join(d, "run.json")
-            if not (os.path.isdir(d) and os.path.exists(os.path.join(d, "model.zip"))):
+        seen: set[str] = set()
+        # candidate names: subdirectories + flat .zip/.pt files (deduped)
+        names: list[str] = []
+        for entry in sorted(os.listdir(base)):
+            full = os.path.join(base, entry)
+            if os.path.isdir(full):
+                names.append(entry)
+            elif entry.endswith((".zip", ".pt")):
+                names.append(os.path.splitext(entry)[0])
+        for name in names:
+            if name in seen:
                 continue
-            info = {"name": name, "saved_at": "", "config": ""}
-            try:
-                with open(rj, encoding="utf-8") as f:
-                    run = json.load(f)
-                info["saved_at"] = run.get("saved_at", "")
-                summ = run.get("summary") or {}
-                info["config"] = summ.get("config", "")
-            except Exception:
-                pass
+            seen.add(name)
+            det = self.detect_model(name)
+            if det is None:
+                continue
+            info = {"name": name, "algo": det["algo"], "saved_at": "", "config": ""}
+            rj = os.path.join(base, name, "run.json")
+            if os.path.exists(rj):
+                try:
+                    with open(rj, encoding="utf-8") as f:
+                        run = json.load(f)
+                    info["saved_at"] = run.get("saved_at", "")
+                    info["config"] = (run.get("summary") or {}).get("config", "")
+                except Exception:
+                    pass
             out.append(info)
         return out
 
@@ -407,9 +564,9 @@ class TrainingSession:
                 env_raw = TrafficEnv(cfg)
                 self._graph = env_raw._graph
                 self._bridge_ref = env_raw._bridge
-                if algo in ("ppo", "a2c"):
+                if algo == "ppo":
                     self._run_sb3(env_raw, config_path, total_timesteps, algo)
-                else:  # fixed_time | random — rule-based baselines (no learning)
+                else:  # fixed_random — rule-based baseline (no learning)
                     self._run_baseline(env_raw, config_path, total_timesteps, algo)
 
             self._build_summary(config_path, total_timesteps)
@@ -421,9 +578,7 @@ class TrainingSession:
             self.status.error = f"{type(exc).__name__}: {exc}"
 
     def _run_sb3(self, env_raw, config_path: str, total_timesteps: int, algo: str) -> None:
-        """Train a Stable-Baselines3 policy (PPO or A2C) and stream it live."""
-        from stable_baselines3 import A2C
-
+        """Train the centralized SB3 PPO policy and stream it live."""
         def _make():
             return gymnasium.wrappers.FlattenObservation(env_raw)
 
@@ -431,20 +586,15 @@ class TrainingSession:
         venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
         p = getattr(self, "_params", {})
-        common = dict(verbose=0, policy_kwargs={"net_arch": [256, 256, 128]})
-        if algo == "ppo":
-            ppo_n_steps = int(p.get("n_steps", 2048))
-            # SB3 needs the rollout buffer (n_steps * 1 env) ≥ batch_size, so shrink
-            # the batch for tiny user-chosen rollouts instead of crashing.
-            ppo_batch = min(64, ppo_n_steps)
-            model = PPO("MlpPolicy", venv,
-                        n_steps=ppo_n_steps, batch_size=ppo_batch, n_epochs=10,
-                        learning_rate=p.get("learning_rate", 3e-4),
-                        ent_coef=p.get("ent_coef", 0.01), **common)
-        else:  # a2c (n_steps not exposed: A2C uses a tiny rollout by design)
-            model = A2C("MlpPolicy", venv, n_steps=5,
-                        learning_rate=p.get("learning_rate", 7e-4),
-                        ent_coef=p.get("ent_coef", 0.01), **common)
+        ppo_n_steps = int(p.get("n_steps", 2048))
+        # SB3 needs the rollout buffer (n_steps * 1 env) ≥ batch_size, so shrink
+        # the batch for tiny user-chosen rollouts instead of crashing.
+        ppo_batch = min(64, ppo_n_steps)
+        model = PPO("MlpPolicy", venv,
+                    n_steps=ppo_n_steps, batch_size=ppo_batch, n_epochs=10,
+                    learning_rate=p.get("learning_rate", 3e-4),
+                    ent_coef=p.get("ent_coef", 0.01),
+                    verbose=0, policy_kwargs={"net_arch": [256, 256, 128]})
         # keep the artefacts so the model can be saved on demand afterward
         self._model = model
         self._venv  = venv
@@ -454,15 +604,17 @@ class TrainingSession:
         venv.close()
 
     def _run_baseline(self, env_raw, config_path: str, total_timesteps: int, algo: str) -> None:
-        """Run a non-learning baseline controller (fixed-time or random), streaming
-        each step exactly like training so the dashboard shows live traffic and the
-        same start-vs-end summary — this is the apples-to-apples comparison line for
-        'how much does the RL actually help'. No model is produced, so it can't be
-        saved (can_save stays false)."""
+        """Run the 'badly configured city' baseline (fixed_random): each light
+        cycles on a FIXED random period + offset, held constant for the run.
+        Streams each step like training so the dashboard shows live traffic and a
+        start-vs-end summary — the realistic starting point RL must beat. No model
+        is produced, so it can't be saved (can_save stays false)."""
         env = gymnasium.wrappers.FlattenObservation(env_raw)
         n_lights = env_raw._graph.num_lights
         rng = np.random.default_rng(0)
-        cycle_steps = 30  # fixed-time: switch NS/EW every 3 s at dt=0.1
+        # per-light fixed period (15-60 steps) + offset — stable but uncoordinated
+        periods = rng.integers(15, 61, size=n_lights)
+        offsets = np.array([rng.integers(0, p) for p in periods], dtype=np.int64)
 
         last_wall = time.perf_counter()
         obs, _ = env.reset()
@@ -485,11 +637,7 @@ class TrainingSession:
             fps = 1.0 / max(now - last_wall, 1e-6)
             last_wall = now
 
-            if algo == "fixed_time":
-                phase = (step // cycle_steps) % 2
-                action = np.full(n_lights, phase, dtype=np.int64)
-            else:  # random
-                action = env.action_space.sample()
+            action = (((step + offsets) // periods) % 2).astype(np.int64)
             obs, reward, terminated, truncated, _ = env.step(action)
 
             state = env_raw._last_state

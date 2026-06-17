@@ -35,7 +35,7 @@ def print_summary_table(
 ) -> None:
     """
     Print a comparison table to stdout.
-    If `reference` is given (e.g. "fixed_time"), show % improvement column.
+    If `reference` is given (e.g. "fixed_random"), show % improvement column.
     """
     ref  = results.get(reference) if reference else None
     sep  = "-" * (_COL_W * 6 + 5)

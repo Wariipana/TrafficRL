@@ -54,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output-dir",   default="rl/results")
     p.add_argument("--mock",         action="store_true",
                    help="Use synthetic data — no C++ server required")
-    p.add_argument("--reference",    default="fixed_time",
+    p.add_argument("--reference",    default="fixed_random",
                    help="Reference algorithm for % improvement column")
     return p.parse_args()
 
@@ -91,10 +91,9 @@ def _make_mock_result(
 def _run_mock_benchmark(args) -> dict:
     label = os.path.splitext(os.path.basename(args.config))[0]
     n     = args.episodes
-    # Mock performance: HRL > IPPO > PPO > fixed_time > random
+    # Mock performance: HRL > IPPO > PPO > fixed_random (badly configured city)
     results = {
-        "fixed_time":     _make_mock_result("fixed_time",     label, n, 0,  wait_base=72, tp_base=0.007),
-        "random":         _make_mock_result("random",         label, n, 1,  wait_base=95, tp_base=0.005),
+        "fixed_random":   _make_mock_result("fixed_random",   label, n, 0,  wait_base=80, tp_base=0.006),
         "ppo_centralized":_make_mock_result("ppo_centralized",label, n, 2,  wait_base=52, tp_base=0.010),
         "ippo_gnn":       _make_mock_result("ippo_gnn",       label, n, 3,  wait_base=43, tp_base=0.012),
         "hrl":            _make_mock_result("hrl",            label, n, 4,  wait_base=36, tp_base=0.014),
@@ -103,7 +102,7 @@ def _run_mock_benchmark(args) -> dict:
 
 
 def _run_live_benchmark(args) -> dict:
-    from rl.benchmark.runners import FixedTimeRunner, RandomRunner
+    from rl.benchmark.runners import FixedRandomRunner
 
     env_cfg = EnvConfig.from_yaml(args.config)
     label   = os.path.splitext(os.path.basename(args.config))[0]
@@ -114,18 +113,12 @@ def _run_live_benchmark(args) -> dict:
 
     print("[benchmark] Initializing runners…")
 
-    ft = FixedTimeRunner(env_cfg)
-    runners.append(ft)
-    print("[benchmark] Running fixed_time…")
+    # Realistic "badly configured city" baseline that RL must beat.
+    fr = FixedRandomRunner(env_cfg)
+    runners.append(fr)
+    print("[benchmark] Running fixed_random…")
     t0 = time.perf_counter()
-    results["fixed_time"] = ft.run_episodes(n, so, label)
-    print(f"  done in {time.perf_counter()-t0:.1f}s")
-
-    rn = RandomRunner(env_cfg)
-    runners.append(rn)
-    print("[benchmark] Running random…")
-    t0 = time.perf_counter()
-    results["random"] = rn.run_episodes(n, so, label)
+    results["fixed_random"] = fr.run_episodes(n, so, label)
     print(f"  done in {time.perf_counter()-t0:.1f}s")
 
     if args.ppo_model:
