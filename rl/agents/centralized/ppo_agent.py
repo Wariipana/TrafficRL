@@ -19,13 +19,17 @@ class TrainingConfig:
     n_steps:         int = 2048
     batch_size:      int = 64
     n_epochs:        int = 10
-    # lr lowered 3e-4→1e-4 and ent_coef 0.01→0.003: the default run showed
-    # approx_kl ~0.12 (target ~0.02) and clip_fraction ~0.6 sustained, with the
-    # policy stuck near-uniform (entropy ≈ max). Smaller steps + less entropy
-    # pressure let the policy actually commit to decisions.
-    learning_rate:   float = 1e-4
+    # Tuned in two passes against real runs:
+    #  pass 1 (3e-4, kl 0.03): approx_kl ~0.12, clip ~0.6 — unstable, policy stayed
+    #          near-uniform (entropy ≈ max).
+    #  pass 2 (1e-4, kl 0.03): KL healthy (~0.03) but ep_rew_mean FLAT over 70k
+    #          steps — the target_kl cut each update at epoch ~6/10 and lr was too
+    #          low, so the policy barely moved per rollout.
+    #  pass 3 (this): lr 1e-4→2e-4 and target_kl 0.03→0.06 to let updates actually
+    #          progress while staying clear of the 0.12 instability.
+    learning_rate:   float = 2e-4
     ent_coef:        float = 0.003
-    target_kl:       float = 0.03      # stop a PPO update early if it diverges too far
+    target_kl:       float = 0.06      # stop a PPO update early if it diverges too far
     log_dir:         str  = "rl/runs"
     save_path:       str  = "rl/models/ppo_centralized"
     seed:            int  = 42

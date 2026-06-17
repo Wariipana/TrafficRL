@@ -148,11 +148,12 @@ class IPPOConfig:
     gae_lambda:      float  = 0.95
     clip_eps:        float  = 0.2
     vf_coef:         float  = 0.5
-    # ent_coef 0.01→0.003 and lr 3e-4→1e-4, same reasoning as centralized PPO:
-    # keep the policy from staying near-uniform and the updates from diverging.
+    # Tuned with centralized PPO (same reasoning): 3e-4 was unstable, 1e-4 left the
+    # reward flat, 2e-4 is the middle ground. IPPO has no target_kl gate, so the lr
+    # is the main knob here. ent_coef kept low so the policy commits.
     ent_coef:        float  = 0.003
     max_grad_norm:   float  = 0.5
-    learning_rate:   float  = 1e-4
+    learning_rate:   float  = 2e-4
     k_hops:          int    = 1            # GNN neighborhood hops
     gnn_hidden:      int    = 128
     gnn_embed:       int    = 64

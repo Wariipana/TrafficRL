@@ -50,7 +50,7 @@ def main() -> None:
     worker  = HRLWorkerActorCritic().to(device)
     manager = HRLManager(ManagerConfig(), num_zones=num_zones)
 
-    w_opt   = torch.optim.Adam(worker.parameters(), lr=1e-4)  # lowered like PPO/IPPO
+    w_opt   = torch.optim.Adam(worker.parameters(), lr=2e-4)  # tuned with PPO/IPPO
 
     os.makedirs(args.save_dir, exist_ok=True)
     total_steps  = 0
