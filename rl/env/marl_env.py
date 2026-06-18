@@ -186,7 +186,17 @@ class MARLTrafficEnv(ParallelEnv):
         wait_norm  = float(np.clip(s.avg_wait_time / 600.0, 0.0, 1.0))
         queue_norm = float(np.clip(np.mean(s.queue_length[:n]) / 50.0, 0.0, 1.0))
         tp_norm    = float(np.clip(s.throughput / 50.0, 0.0, 1.0))
-        return -(wait_norm ** 2) - 0.4 * queue_norm + 0.1 * tp_norm
+        # Phase-alignment bonus: reward serving the heavier direction.
+        # Small weight (0.05) so it guides without dominating — previous attempts
+        # with weight=0.5 caused phase-chasing where the policy tried to switch
+        # every step but min_green blocked it, leaving rewards unchanged.
+        half       = max(1, n // 2)
+        q_ns       = float(np.sum(s.queue_length[:half]))
+        q_ew       = float(np.sum(s.queue_length[half:n]))
+        q_active   = q_ns if s.phase == 0 else q_ew
+        q_inactive = q_ew if s.phase == 0 else q_ns
+        phase_align = (q_active - q_inactive) / (q_active + q_inactive + 1e-3)
+        return -(wait_norm ** 2) - 0.4 * queue_norm + 0.1 * tp_norm + 0.05 * phase_align
 
     # ---- Info ----
 

@@ -30,14 +30,14 @@ def compute_reward(state: StateSnapshot, cfg: RewardConfig) -> float:
     """
     Reward signal for the centralized PPO env.
 
-    Three terms, all in [0, 1]:
-      -(wait²)      quadratic wait penalty — gradient grows with congestion,
-                    preventing the policy from settling at a mediocre plateau
-      -0.4*queue    linear queue penalty — responds immediately to phase
-                    changes (fast credit assignment, fixes frozen gradients)
-      +0.1*tp       small throughput bonus — auxiliary dense signal
+    Four terms:
+      -(wait²)          quadratic wait penalty — gradient grows with congestion
+      -0.4*queue        linear queue penalty — fast credit assignment
+      +0.1*tp           throughput bonus — auxiliary dense signal
+      +0.05*phase_align per-step signal for serving the heavier direction;
+                        weight kept small so the policy doesn't phase-chase
 
-    Range: [-1.4, +0.1]
+    Range: [-1.45, +0.15]
     """
     if not state.intersections:
         return 0.0
@@ -50,4 +50,15 @@ def compute_reward(state: StateSnapshot, cfg: RewardConfig) -> float:
     throughput = float(np.clip(
         np.mean([s.throughput for s in state.intersections]) / 50.0, 0.0, 1.0))
 
-    return -(avg_wait ** 2) - 0.4 * avg_queue + 0.1 * throughput
+    phase_aligns = []
+    for s in state.intersections:
+        n    = max(1, s.num_lanes)
+        half = max(1, n // 2)
+        q_ns = float(np.sum(s.queue_length[:half]))
+        q_ew = float(np.sum(s.queue_length[half:n]))
+        q_active   = q_ns if s.phase == 0 else q_ew
+        q_inactive = q_ew if s.phase == 0 else q_ns
+        phase_aligns.append((q_active - q_inactive) / (q_active + q_inactive + 1e-3))
+    avg_phase_align = float(np.mean(phase_aligns))
+
+    return -(avg_wait ** 2) - 0.4 * avg_queue + 0.1 * throughput + 0.05 * avg_phase_align
