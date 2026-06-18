@@ -6,6 +6,7 @@ Usage:
 """
 from __future__ import annotations
 import argparse
+import datetime
 import os
 
 import numpy as np
@@ -53,6 +54,19 @@ def main() -> None:
     w_opt   = torch.optim.Adam(worker.parameters(), lr=2e-4)  # tuned with PPO/IPPO
 
     os.makedirs(args.save_dir, exist_ok=True)
+
+    _ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    _log_path = os.path.join(args.save_dir, f"hrl_{_ts}.log")
+    _lf       = open(_log_path, "w", buffering=1)
+
+    def _log(msg: str, stdout: bool = True) -> None:
+        line = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}"
+        _lf.write(line + "\n")
+        if stdout:
+            print(line)
+
+    _log(f"[HRL] Logging to {_log_path}")
+
     total_steps    = 0
     env_steps      = 0   # env steps (≠ total_steps which counts per-agent steps)
     episode        = 0
@@ -64,6 +78,8 @@ def main() -> None:
     ep_worker_rew = 0.0
     ep_env_rew    = 0.0
     ep_len        = 0
+    best_env_rew  = float("-inf")
+    best_worker_path = os.path.join(args.save_dir, "worker_best.pt")
 
     print(f"[HRL] agents={n_agents}  zones={num_zones}  device={device}")
 
@@ -130,7 +146,8 @@ def main() -> None:
 
         if not env.agents:
             episode += 1
-            obs_d, _ = env.reset(seed=args.seed + (episode % 20))
+            next_seed = args.seed + 1 + (episode % 20)
+            obs_d, _ = env.reset(seed=next_seed)
             # Rebuild adj_mask if topology changed between seeds.
             if env._graph.num_lights != n_agents:
                 n_agents = env._graph.num_lights
@@ -143,11 +160,15 @@ def main() -> None:
             # Update the Manager every episode (it was previously updated only on
             # every 5th episode, wasting 4/5 of the collected transitions).
             m_loss = manager.update()
-            if episode % 5 == 0:
-                mloss_s = f"manager_loss={m_loss:.4f}" if m_loss is not None else "manager_loss=n/a"
-                print(f"[HRL] ep={episode} steps={total_steps} "
+            mloss_s = f"manager_loss={m_loss:.4f}" if m_loss is not None else "manager_loss=n/a"
+            ep_msg = (f"[HRL] ep={episode} seed={next_seed} steps={total_steps} "
                       f"ep_rew_mean={ep_worker_rew:.2f} env_rew={ep_env_rew:.2f} "
                       f"ep_len={ep_len} {mloss_s}")
+            _log(ep_msg, stdout=(episode % 5 == 0))
+            if ep_env_rew > best_env_rew:
+                best_env_rew = ep_env_rew
+                torch.save(worker.state_dict(), best_worker_path)
+                _log(f"[HRL] *** new best env_rew={best_env_rew:.2f} at ep={episode} seed={next_seed} → {best_worker_path}")
             ep_worker_rew = 0.0
             ep_env_rew    = 0.0
             ep_len        = 0
@@ -168,7 +189,8 @@ def main() -> None:
     torch.save(worker.state_dict(), worker_path)
     manager.save(manager_path)
     env.close()
-    print(f"[HRL] Saved worker → {worker_path}")
+    _lf.close()
+    print(f"[HRL] Saved worker → {worker_path}  (best: {best_worker_path})")
     print(f"[HRL] Saved manager → {manager_path}")
 
 

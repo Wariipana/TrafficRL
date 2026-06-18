@@ -1,4 +1,5 @@
 from __future__ import annotations
+import datetime
 import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -238,6 +239,18 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
     os.makedirs(cfg.log_dir,  exist_ok=True)
     os.makedirs(os.path.dirname(cfg.save_path) or ".", exist_ok=True)
 
+    _ts      = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    _log_path = os.path.join(cfg.log_dir, f"ippo_{_ts}.log")
+    _lf      = open(_log_path, "w", buffering=1)   # line-buffered
+
+    def _log(msg: str, stdout: bool = True) -> None:
+        line = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}"
+        _lf.write(line + "\n")
+        if stdout:
+            print(line)
+
+    _log(f"[IPPO] Logging to {_log_path}")
+
     torch.manual_seed(cfg.seed)
     device = torch.device(cfg.device)
 
@@ -266,6 +279,8 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
     # learning (mean reward per agent over the episode) — not just the episode count.
     ep_reward_sum = 0.0
     ep_len        = 0
+    best_rew      = float("-inf")
+    best_path     = cfg.save_path + "_best.pt"
 
     while total_steps < cfg.total_timesteps:
         buffer.reset()
@@ -299,7 +314,11 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
 
                 if not env.agents:
                     episode += 1
-                    obs_d, _ = env.reset(seed=cfg.seed + (episode % 20))
+                    # Cycle through 20 seeds starting from cfg.seed+1, never
+                    # revisiting cfg.seed itself (seed=42 consistently produces
+                    # a harder traffic pattern that destabilises gradients).
+                    next_seed = cfg.seed + 1 + (episode % 20)
+                    obs_d, _ = env.reset(seed=next_seed)
                     # Rebuild adj_mask if topology changed (different seeds may
                     # produce different numbers of lights on the same grid).
                     if env._graph.num_lights != n_agents:
@@ -311,9 +330,13 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
                             device=device,
                         )
                         buffer = RolloutBuffer(cfg.n_steps, n_agents, device)
-                    if episode % 10 == 0:
-                        print(f"[IPPO] ep={episode} steps={total_steps} "
+                    ep_msg = (f"[IPPO] ep={episode} seed={next_seed} steps={total_steps} "
                               f"ep_rew_mean={ep_reward_sum:.2f} ep_len={ep_len}")
+                    _log(ep_msg, stdout=(episode % 10 == 0))
+                    if ep_reward_sum > best_rew:
+                        best_rew = ep_reward_sum
+                        torch.save(model.state_dict(), best_path)
+                        _log(f"[IPPO] *** new best {best_rew:.2f} at ep={episode} seed={next_seed} → {best_path}")
                     ep_reward_sum = 0.0
                     ep_len        = 0
 
@@ -371,13 +394,14 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
                 ent_vals.append(entropy.mean().item())
 
         update_count += 1
-        if update_count % 10 == 0:
-            print(f"[IPPO] update={update_count} steps={total_steps} "
-                  f"pg_loss={np.mean(pg_losses):.4f} "
-                  f"vf_loss={np.mean(vf_losses):.4f} "
-                  f"entropy={np.mean(ent_vals):.4f}")
+        upd_msg = (f"[IPPO] update={update_count} steps={total_steps} "
+                   f"pg_loss={np.mean(pg_losses):.4f} "
+                   f"vf_loss={np.mean(vf_losses):.4f} "
+                   f"entropy={np.mean(ent_vals):.4f}")
+        _log(upd_msg, stdout=(update_count % 10 == 0))
 
     torch.save(model.state_dict(), cfg.save_path + ".pt")
     env.close()
-    print(f"[IPPO] Model saved to {cfg.save_path}.pt")
+    _lf.close()
+    print(f"[IPPO] Model saved to {cfg.save_path}.pt  (best: {best_path})")
     return model
