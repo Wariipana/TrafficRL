@@ -130,7 +130,16 @@ def main() -> None:
 
         if not env.agents:
             episode += 1
-            obs_d, _ = env.reset()
+            obs_d, _ = env.reset(seed=args.seed + (episode % 20))
+            # Rebuild adj_mask if topology changed between seeds.
+            if env._graph.num_lights != n_agents:
+                n_agents = env._graph.num_lights
+                adj_mask = build_adjacency_mask(
+                    env._graph.light_node_ids,
+                    env._graph.edges,
+                    k_hops=1,
+                    device=device,
+                )
             # Update the Manager every episode (it was previously updated only on
             # every 5th episode, wasting 4/5 of the collected transitions).
             m_loss = manager.update()

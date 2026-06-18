@@ -340,6 +340,10 @@ class TrainingSession:
             self._publish_marl_step(env, step, 0.0, fps)
             if not env.agents:
                 obs_d, _ = env.reset()
+                if env._graph.num_lights != n:
+                    n   = env._graph.num_lights
+                    adj = build_adjacency_mask(
+                        env._graph.light_node_ids, env._graph.edges, k_hops=1)
         env.close()
 
     def _infer_hrl(self, det: dict, config_path: str) -> None:
@@ -388,6 +392,10 @@ class TrainingSession:
             self._publish_marl_step(env, step, 0.0, fps)
             if not env.agents:
                 obs_d, _ = env.reset()
+                if env._graph.num_lights != n:
+                    n   = env._graph.num_lights
+                    adj = build_adjacency_mask(
+                        env._graph.light_node_ids, env._graph.edges, k_hops=1)
         env.close()
 
     # ---- persistence ----

@@ -299,7 +299,18 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
 
                 if not env.agents:
                     episode += 1
-                    obs_d, _ = env.reset()
+                    obs_d, _ = env.reset(seed=cfg.seed + (episode % 20))
+                    # Rebuild adj_mask if topology changed (different seeds may
+                    # produce different numbers of lights on the same grid).
+                    if env._graph.num_lights != n_agents:
+                        n_agents = env._graph.num_lights
+                        adj_mask = build_adjacency_mask(
+                            env._graph.light_node_ids,
+                            env._graph.edges,
+                            k_hops=cfg.k_hops,
+                            device=device,
+                        )
+                        buffer = RolloutBuffer(cfg.n_steps, n_agents, device)
                     if episode % 10 == 0:
                         print(f"[IPPO] ep={episode} steps={total_steps} "
                               f"ep_rew_mean={ep_reward_sum:.2f} ep_len={ep_len}")
