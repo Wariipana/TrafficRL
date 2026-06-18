@@ -181,10 +181,12 @@ class MARLTrafficEnv(ParallelEnv):
     # ---- Reward ----
 
     def _local_reward(self, state: StateSnapshot, idx: int, global_r: float) -> float:
-        s         = state.intersections[idx]
-        wait_norm = float(np.clip(s.avg_wait_time / 600.0, 0.0, 1.0))
-        tp_norm   = float(np.clip(s.throughput    /  50.0, 0.0, 1.0))
-        return -wait_norm + 0.1 * tp_norm
+        s          = state.intersections[idx]
+        n          = max(1, s.num_lanes)
+        wait_norm  = float(np.clip(s.avg_wait_time / 600.0, 0.0, 1.0))
+        queue_norm = float(np.clip(np.mean(s.queue_length[:n]) / 50.0, 0.0, 1.0))
+        tp_norm    = float(np.clip(s.throughput / 50.0, 0.0, 1.0))
+        return -(wait_norm ** 2) - 0.4 * queue_norm + 0.1 * tp_norm
 
     # ---- Info ----
 

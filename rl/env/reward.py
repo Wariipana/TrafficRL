@@ -28,21 +28,26 @@ def _phase_match(s) -> float:
 
 def compute_reward(state: StateSnapshot, cfg: RewardConfig) -> float:
     """
-    Shared reward signal for the centralized PPO env.
+    Reward signal for the centralized PPO env.
 
-    Single objective: minimize average wait time.
-    Throughput is a small auxiliary term (weight 0.1) to provide a denser
-    learning signal — it cannot override the wait penalty (ratio 10:1).
+    Three terms, all in [0, 1]:
+      -(wait²)      quadratic wait penalty — gradient grows with congestion,
+                    preventing the policy from settling at a mediocre plateau
+      -0.4*queue    linear queue penalty — responds immediately to phase
+                    changes (fast credit assignment, fixes frozen gradients)
+      +0.1*tp       small throughput bonus — auxiliary dense signal
 
-    Range: [-1.0, +0.1]
+    Range: [-1.4, +0.1]
     """
     if not state.intersections:
         return 0.0
 
-    avg_wait   = np.mean([s.avg_wait_time for s in state.intersections]) / 600.0
-    throughput = np.mean([s.throughput    for s in state.intersections]) / 50.0
+    avg_wait  = float(np.clip(
+        np.mean([s.avg_wait_time for s in state.intersections]) / 600.0, 0.0, 1.0))
+    avg_queue = float(np.clip(
+        np.mean([np.mean(s.queue_length[:max(1, s.num_lanes)])
+                 for s in state.intersections]) / 50.0, 0.0, 1.0))
+    throughput = float(np.clip(
+        np.mean([s.throughput for s in state.intersections]) / 50.0, 0.0, 1.0))
 
-    return (
-        - float(np.clip(avg_wait,   0.0, 1.0))
-        + 0.1 * float(np.clip(throughput, 0.0, 1.0))
-    )
+    return -(avg_wait ** 2) - 0.4 * avg_queue + 0.1 * throughput
