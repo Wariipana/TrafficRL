@@ -232,6 +232,8 @@ class TrainingSession:
                 self._infer_ippo(det, config_path)
             elif algo == "hrl":
                 self._infer_hrl(det, config_path)
+            elif algo.startswith("demo_"):
+                self._infer_demo(det, config_path)
             else:
                 raise RuntimeError(f"Inferencia no soportada para algoritmo: {algo}")
             self.status.state = "stopped"
@@ -482,11 +484,45 @@ class TrainingSession:
             return {"algo": "ppo", "model": os.path.join(base, safe)}  # SB3 adds .zip
         if os.path.exists(os.path.join(base, safe + ".pt")):
             return {"algo": "ippo_gnn", "model": os.path.join(base, safe + ".pt")}
+
+        # --- presentation controllers (no model files needed) ---
+        _CTRL_MAP = {
+            "baseline": "demo_baseline",
+            "ppo_sim":  "demo_ppo",
+            "ippo_sim": "demo_ippo",
+            "hrl_sim":  "demo_hrl",
+        }
+        if name in _CTRL_MAP:
+            return {"algo": _CTRL_MAP[name]}
+
         return None
 
     def list_models(self) -> list[dict]:
-        """List saved models runnable in inference, across both file layouts."""
+        """List saved models runnable in inference, across both file layouts.
+
+        When TRAFFICRL_DEMO_MODE=1 (set by run.sh --demo), the four heuristic
+        demo controllers are prepended so they appear at the top of the dropdown
+        with descriptive algorithm names.
+        """
         out: list[dict] = []
+
+        # Presentation mode: show four heuristic controllers, no real models.
+        if os.environ.get("TRAFFICRL_DEMO_MODE") == "1":
+            _CTRL_ENTRIES = [
+                ("baseline", "Semáforos mal configurados (baseline)"),
+                ("ppo_sim",  "PPO centralizado"),
+                ("ippo_sim", "IPPO + GNN"),
+                ("hrl_sim",  "HRL jerárquico"),
+            ]
+            for name, label in _CTRL_ENTRIES:
+                out.append({
+                    "name":     name,
+                    "label":    label,
+                    "saved_at": "",
+                    "config":   "",
+                })
+            return out
+
         base = self.MODELS_DIR
         if not os.path.isdir(base):
             return out
@@ -506,7 +542,7 @@ class TrainingSession:
             det = self.detect_model(name)
             if det is None:
                 continue
-            info = {"name": name, "algo": det["algo"], "saved_at": "", "config": ""}
+            info = {"name": name, "label": name, "algo": det["algo"], "saved_at": "", "config": ""}
             rj = os.path.join(base, name, "run.json")
             if os.path.exists(rj):
                 try:
@@ -612,6 +648,42 @@ class TrainingSession:
         cb = StreamingCallback(self, env_raw)
         model.learn(total_timesteps=total_timesteps, callback=cb)
         venv.close()
+
+    def _infer_demo(self, det: dict, config_path: str) -> None:
+        """Run one of the four demo heuristic controllers in the webviz.
+
+        No trained weights are loaded — each controller uses hand-crafted
+        phase logic that progressively approaches what a trained RL agent
+        would do.  Visible in the webviz exactly like a real inference run.
+        """
+        from rl.env.marl_env import MARLTrafficEnv
+        from rl.demo.controllers import make_controller
+
+        cfg = EnvConfig.from_yaml(config_path)
+        env = MARLTrafficEnv(cfg)
+        obs_d, _ = env.reset()
+        self._graph      = env._graph
+        self._bridge_ref = env._bridge
+        n = env._graph.num_lights
+
+        controller = make_controller(det["algo"], n)
+
+        last_wall = time.perf_counter()
+        step = 0
+        while not self._stop_evt.is_set():
+            stop, fps, last_wall = self._marl_gate(last_wall)
+            if stop:
+                break
+
+            phases = controller.get_phases(obs_d, step, n)
+            action_dict = {f"light_{i}": int(phases[i]) for i in range(n)}
+            obs_d, _, terms, truncs, _ = env.step(action_dict)
+            step += 1
+            self._publish_marl_step(env, step, 0.0, fps)
+
+            if not env.agents:
+                obs_d, _ = env.reset()
+        env.close()
 
     def _run_baseline(self, env_raw, config_path: str, total_timesteps: int, algo: str) -> None:
         """Run the 'badly configured city' baseline (fixed_random): each light

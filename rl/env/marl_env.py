@@ -181,22 +181,23 @@ class MARLTrafficEnv(ParallelEnv):
     # ---- Reward ----
 
     def _local_reward(self, state: StateSnapshot, idx: int, global_r: float) -> float:
-        s          = state.intersections[idx]
-        n          = max(1, s.num_lanes)
-        wait_norm  = float(np.clip(s.avg_wait_time / 600.0, 0.0, 1.0))
-        queue_norm = float(np.clip(np.mean(s.queue_length[:n]) / 50.0, 0.0, 1.0))
-        tp_norm    = float(np.clip(s.throughput / 50.0, 0.0, 1.0))
-        # Phase-alignment bonus: reward serving the heavier direction.
-        # Small weight (0.05) so it guides without dominating — previous attempts
-        # with weight=0.5 caused phase-chasing where the policy tried to switch
-        # every step but min_green blocked it, leaving rewards unchanged.
-        half       = max(1, n // 2)
-        q_ns       = float(np.sum(s.queue_length[:half]))
-        q_ew       = float(np.sum(s.queue_length[half:n]))
-        q_active   = q_ns if s.phase == 0 else q_ew
-        q_inactive = q_ew if s.phase == 0 else q_ns
-        phase_align = (q_active - q_inactive) / (q_active + q_inactive + 1e-3)
-        return -(wait_norm ** 2) - 0.4 * queue_norm + 0.1 * tp_norm + 0.05 * phase_align
+        s         = state.intersections[idx]
+        n         = max(1, s.num_lanes)
+        half      = max(1, n // 2)
+        wait_norm = float(np.clip(s.avg_wait_time / 600.0, 0.0, 1.0))
+        tp_norm   = float(np.clip(s.throughput / 50.0, 0.0, 1.0))
+        q_ns      = float(np.sum(s.queue_length[:half]))
+        q_ew      = float(np.sum(s.queue_length[half:n]))
+        # Directional queue penalty: strongly penalize letting the RED direction build up.
+        # Using inactive/active split rather than a blended avg so the reward is not
+        # identical regardless of phase — the key fix for constant-phase collapse.
+        inactive_q = q_ew if s.phase == 0 else q_ns
+        active_q   = q_ns if s.phase == 0 else q_ew
+        scale = max(50.0 * half, 1.0)
+        inactive_q_norm = float(np.clip(inactive_q / scale, 0.0, 1.0))
+        active_q_norm   = float(np.clip(active_q   / scale, 0.0, 1.0))
+        phase_align = (active_q - inactive_q) / (active_q + inactive_q + 1e-3)
+        return -(wait_norm ** 2) - 0.5 * inactive_q_norm - 0.1 * active_q_norm + 0.1 * tp_norm + 0.20 * phase_align
 
     # ---- Info ----
 

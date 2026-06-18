@@ -553,8 +553,8 @@ async function loadModelList() {
     const sel = $("model-select");
     sel.innerHTML = models.length
       ? models.map(function (m) {
-          const tag = m.algo ? ` (${m.algo})` : "";
-          return `<option value="${m.name}">${m.name}${tag}</option>`;
+          const display = m.label || m.name;
+          return `<option value="${m.name}">${display}</option>`;
         }).join("")
       : '<option value="">— sin modelos —</option>';
     $("btn-infer").disabled = models.length === 0;
