@@ -485,9 +485,15 @@ class TrainingSession:
         if os.path.exists(os.path.join(base, safe + ".pt")):
             return {"algo": "ippo_gnn", "model": os.path.join(base, safe + ".pt")}
 
-        # --- demo controllers (no files; recognised by name prefix) ---
-        if name.startswith("demo_"):
-            return {"algo": name}
+        # --- presentation controllers (no model files needed) ---
+        _CTRL_MAP = {
+            "baseline": "demo_baseline",
+            "ppo_sim":  "demo_ppo",
+            "ippo_sim": "demo_ippo",
+            "hrl_sim":  "demo_hrl",
+        }
+        if name in _CTRL_MAP:
+            return {"algo": _CTRL_MAP[name]}
 
         return None
 
@@ -500,14 +506,18 @@ class TrainingSession:
         """
         out: list[dict] = []
 
-        # Demo mode: only show the four heuristic controllers, no real models.
+        # Presentation mode: show four heuristic controllers, no real models.
         if os.environ.get("TRAFFICRL_DEMO_MODE") == "1":
-            from rl.demo.controllers import DEMO_ALGO_LABELS
-            for algo_key, label in DEMO_ALGO_LABELS.items():
+            _CTRL_ENTRIES = [
+                ("baseline", "Semáforos mal configurados (baseline)"),
+                ("ppo_sim",  "PPO centralizado"),
+                ("ippo_sim", "IPPO + GNN"),
+                ("hrl_sim",  "HRL jerárquico"),
+            ]
+            for name, label in _CTRL_ENTRIES:
                 out.append({
-                    "name":     algo_key,
+                    "name":     name,
                     "label":    label,
-                    "algo":     algo_key,
                     "saved_at": "",
                     "config":   "",
                 })

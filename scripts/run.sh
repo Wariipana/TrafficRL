@@ -44,7 +44,7 @@ fi
 
 if [[ "$DEMO_MODE" -eq 1 ]]; then
   export TRAFFICRL_DEMO_MODE=1
-  echo "[run] Modo demo activado — los 4 controladores aparecerán en la sección 'Modelo'."
+  echo "[run] Modo presentación — los controladores aparecerán en la sección 'Modelo'."
 fi
 
 # --- comprobaciones previas --------------------------------------------------
