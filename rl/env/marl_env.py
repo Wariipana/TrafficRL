@@ -12,7 +12,7 @@ from .bridge_client import BridgeClient
 from .spaces import (
     MAX_VEH_PER_LANE, MAX_SPEED_MS, MAX_WAIT_S, MAX_PHASE_TIME_S,
 )
-from .reward import compute_reward
+from .reward import compute_reward, _phase_match
 
 
 class MARLTrafficEnv(ParallelEnv):
@@ -183,11 +183,24 @@ class MARLTrafficEnv(ParallelEnv):
     def _local_reward(self, state: StateSnapshot, idx: int, global_r: float) -> float:
         cfg = self.config.reward
         s   = state.intersections[idx]
-        local_r = (
-            - cfg.alpha * s.avg_wait_time
-            - cfg.beta  * float(np.sum(s.queue_length))
-            + cfg.delta * s.throughput
+        n   = max(1, s.num_lanes)
+
+        # Normalize to [0, 1] so each term contributes on a comparable scale.
+        wait_norm  = float(np.clip(s.avg_wait_time / 600.0, 0.0, 1.0))
+        queue_norm = float(np.clip(np.sum(s.queue_length[:n]) / (n * 50.0), 0.0, 1.0))
+        tp_norm    = float(np.clip(s.throughput / 50.0, 0.0, 1.0))
+
+        base_r = (
+            - cfg.alpha * wait_norm
+            - cfg.beta  * queue_norm
+            + cfg.delta * tp_norm
         )
+
+        # Phase-load pressure: +cfg.pressure when serving the heavier direction,
+        # -cfg.pressure when keeping green on the emptier one.
+        pressure_r = cfg.pressure * _phase_match(s)
+
+        local_r = base_r + pressure_r
         return float(cfg.local_weight * local_r + cfg.global_weight * global_r)
 
     # ---- Info ----

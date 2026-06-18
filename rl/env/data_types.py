@@ -97,13 +97,14 @@ class CityConfig:
 
 @dataclass
 class RewardConfig:
-    alpha: float = 0.4
-    beta: float  = 0.3
-    gamma: float = 0.2
-    delta: float = 0.1
-    eta: float   = 0.3
-    zeta: float  = 0.2
-    local_weight: float  = 0.7
+    alpha:        float = 0.4   # wait penalty            (input normalized to [0,1])
+    beta:         float = 0.3   # queue density penalty   (input normalized to [0,1])
+    gamma:        float = 0.2   # max-queue penalty       (input normalized to [0,1])
+    delta:        float = 0.2   # throughput reward       (input normalized to [0,1])
+    eta:          float = 0.3   # global throughput reward
+    zeta:         float = 0.2   # congestion spread penalty
+    pressure:     float = 0.5   # phase-load matching signal  (output in [-1, 1])
+    local_weight: float = 0.7
     global_weight: float = 0.3
 
 

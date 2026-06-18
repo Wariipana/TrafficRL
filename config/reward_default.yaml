@@ -1,10 +1,28 @@
-# Pesos de la funcion de recompensa (ver rl/env/reward.py)
+# Pesos de la función de recompensa (ver rl/env/reward.py)
+#
+# Todos los componentes locales usan inputs normalizados a [0,1], así que
+# los pesos son directamente comparables entre sí.  La recompensa total por
+# step queda en el rango aproximado [-1.2, +0.8].
+#
+# Componentes locales (por intersección):
+#   -alpha * (avg_wait / 600)           penaliza tiempo de espera
+#   -beta  * (queue_sum / n_lanes / 50) penaliza densidad de cola
+#   -gamma * (max_queue / 50)           penaliza la cola más larga (congestión puntual)
+#   +delta * (throughput / 50)          premia vehículos que pasan
+#   +/-pressure * phase_match           premia servir la dirección más cargada
+#                                       [-1 desperdicia verde, +1 sirve bien]
+#
+# Componentes globales (toda la zona):
+#   +eta  * (total_throughput / n * 50) flujo total normalizado
+#   -zeta * congestion_spread           propagación de congestion (ya en [0,1])
+#
 reward:
-  alpha: 0.4        # penalizacion tiempo de espera promedio
-  beta: 0.3         # penalizacion vehiculos detenidos
-  gamma: 0.2        # penalizacion longitud de cola maxima
-  delta: 0.1        # recompensa por throughput local
-  eta: 0.3          # recompensa por throughput global de zona
-  zeta: 0.2         # penalizacion por propagacion de congestion
+  alpha:        0.4
+  beta:         0.3
+  gamma:        0.2
+  delta:        0.2    # subido de 0.1 — el throughput estaba infraponderado
+  eta:          0.3
+  zeta:         0.2
+  pressure:     0.5    # nuevo — señal directa de eficiencia de fase
   local_weight: 0.7
   global_weight: 0.3

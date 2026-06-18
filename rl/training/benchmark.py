@@ -95,7 +95,7 @@ def _run_mock_benchmark(args) -> dict:
     # fixed_random: period 500-700 steps, phase-1 green = 20-25% (≥ min_green).
     # N-S vehicles wait up to 560 steps per cycle → high avg_wait, low throughput.
     results = {
-        "fixed_random":   _make_mock_result("fixed_random",   label, n, 0,  wait_base=120, tp_base=0.004),
+        "fixed_random":   _make_mock_result("fixed_random",   label, n, 0,  wait_base=180, tp_base=0.002),
         "ppo_centralized":_make_mock_result("ppo_centralized",label, n, 2,  wait_base=52,  tp_base=0.010),
         "ippo_gnn":       _make_mock_result("ippo_gnn",       label, n, 3,  wait_base=43,  tp_base=0.012),
         "hrl":            _make_mock_result("hrl",            label, n, 4,  wait_base=36,  tp_base=0.014),

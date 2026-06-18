@@ -82,25 +82,24 @@ class BaseRunner:
 
 class FixedRandomRunner(BaseRunner):
     """
-    "Badly misconfigured city" baseline: long asymmetric fixed-time cycles
+    "Badly misconfigured city" baseline: very long asymmetric fixed-time cycles
     that represent a common real-world failure mode — lights are set with
     a heavy bias toward one phase, leaving cross-traffic waiting for most
     of each cycle.
 
     Each light gets:
-      - A long random period (60-120 steps per full cycle)
-      - A short green window for phase 1 (10-20% of the period)
+      - A very long random period (800-1200 steps per full cycle)
+      - A minimal green window for phase 1 (10-15% of the period)
       - A random offset so the lights are unsynchronised with each other
 
-    Effect: phase-1 vehicles (N-S direction) wait up to 100 steps for their
-    short green window while phase-0 (E-W) monopolises the intersection.
-    This produces the high avg_wait and low throughput that RL must beat,
-    while still representing a realistic (if poorly configured) fixed-time
-    controller — not a degenerate flicker or a random coin flip.
+    Effect: phase-1 vehicles (N-S direction) wait up to ~100 simulated seconds
+    for their short green window while phase-0 (E-W) monopolises the intersection
+    for ~85-90% of each cycle.  This produces the high avg_wait and low throughput
+    that RL must beat.
     """
     name = "fixed_random"
 
-    def __init__(self, env_cfg: EnvConfig, period_min: int = 500, period_max: int = 700):
+    def __init__(self, env_cfg: EnvConfig, period_min: int = 800, period_max: int = 1200):
         import gymnasium
         from rl.env.traffic_env import TrafficEnv
         self._env_cfg    = env_cfg
@@ -120,18 +119,18 @@ class FixedRandomRunner(BaseRunner):
         ep_spd_acc  = 0.0
 
         n_lights = self._env.action_space.nvec.shape[0]
-        # Asymmetric long cycles that are compatible with the motor's min_green
+        # Heavily asymmetric long cycles compatible with the motor's min_green
         # constraint (DEFAULT_MIN_GREEN = 10 s = 100 steps at dt=0.1 s).
-        #   period 500-700 steps → full cycle = 50-70 simulated seconds
-        #   phase 1 (N-S) = 20-25% → 100-175 steps ≥ min_green ✓
-        #   phase 0 (E-W) = 75-80% → 375-560 steps — N-S vehicles wait up to
-        #   ~56 simulated seconds per cycle, producing high avg_wait metrics.
+        #   period 800-1200 steps → full cycle = 80-120 simulated seconds
+        #   phase 1 (N-S) = 10-15% → 100-180 steps ≥ min_green ✓
+        #   phase 0 (E-W) = 85-90% → 700-1080 steps — N-S vehicles wait up to
+        #   ~100 simulated seconds per cycle, producing high avg_wait metrics.
         # Random per-light periods and offsets keep the lights unsynchronised so
         # there is no accidental green-wave helping throughput.
         periods   = rng.integers(self._period_min, self._period_max + 1, size=n_lights)
         green_dur = np.maximum(
             100,  # hard floor = min_green; motor rejects switches before this
-            (periods * rng.uniform(0.20, 0.25, size=n_lights)).astype(np.int64),
+            (periods * rng.uniform(0.10, 0.15, size=n_lights)).astype(np.int64),
         )
         offsets = np.array([rng.integers(0, p) for p in periods], dtype=np.int64)
 
