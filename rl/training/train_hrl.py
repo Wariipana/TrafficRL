@@ -51,7 +51,7 @@ def main() -> None:
     worker  = HRLWorkerActorCritic().to(device)
     manager = HRLManager(ManagerConfig(), num_zones=num_zones)
 
-    w_opt   = torch.optim.Adam(worker.parameters(), lr=2e-4)  # tuned with PPO/IPPO
+    w_opt   = torch.optim.Adam(worker.parameters(), lr=1e-4)  # halved: prevents destructive pg_loss spikes
 
     os.makedirs(args.save_dir, exist_ok=True)
 
@@ -146,7 +146,7 @@ def main() -> None:
 
         if not env.agents:
             episode += 1
-            next_seed = args.seed + 1 + (episode % 20)
+            next_seed = args.seed + 1 + (episode % 50)
             obs_d, _ = env.reset(seed=next_seed)
             # Rebuild adj_mask if topology changed between seeds.
             if env._graph.num_lights != n_agents:
@@ -204,7 +204,8 @@ def _update_worker(
     gae_lambda: float = 0.95,
     clip_eps:  float = 0.2,
     vf_coef:   float = 0.5,
-    ent_coef:  float = 0.003,   # lowered like PPO/IPPO so the policy commits
+    ent_coef:  float = 0.01,    # higher to slow entropy collapse and maintain exploration
+    target_kl: float = 0.015,   # early-stop epochs if policy diverges too much
     n_epochs:  int   = 4,
 ) -> dict:
     import torch.nn.functional as F
@@ -237,12 +238,23 @@ def _update_worker(
     vf_losses: list = []
     ent_vals:  list = []
     bs = max(1, T // 4)
+    kl_exceeded = False
+    last_kl     = 0.0
     for _ in range(n_epochs):
+        if kl_exceeded:
+            break
         perm = torch.randperm(T)
         for start in range(0, T, bs):
             idx = perm[start:start + bs]
             new_lp, entropy, vals = worker.evaluate_actions(
                 flat_all[idx], goals_all[idx], adj_mask, actions_all[idx])
+            with torch.no_grad():
+                logratio  = new_lp - old_lp_all[idx]
+                approx_kl = float(((logratio.exp() - 1) - logratio).mean())
+            if approx_kl > target_kl:
+                last_kl     = approx_kl
+                kl_exceeded = True
+                break
             adv   = advantages[idx]                        # (bs, N)
             ratio = torch.exp(new_lp - old_lp_all[idx])   # (bs, N)
             pg_loss = torch.max(
@@ -258,6 +270,8 @@ def _update_worker(
             pg_losses.append(pg_loss.item())
             vf_losses.append(vf_loss.item())
             ent_vals.append(entropy.mean().item())
+    if kl_exceeded:
+        print(f"[HRL worker] target_kl early stop: kl={last_kl:.4f}")
 
     worker.eval()
     return {

@@ -16,7 +16,7 @@ from rl.models.gnn import TrafficGNN, build_adjacency_mask
 
 # ---- Local observation encoder ----
 
-LOCAL_FEAT_DIM = MAX_LANES * 3 + 1 + 1 + 2 + 3 + 1   # vpl + queue + speed + wait + timer + phase_oh + neighbor + queue_imbalance
+LOCAL_FEAT_DIM = MAX_LANES * 3 + 1 + 1 + 2 + 3 + 1 + 2   # vpl+queue+speed + wait + timer + phase_oh + neighbor + imbalance + dir_queues(ns,ew)
 
 
 class LocalEncoder(nn.Module):
@@ -57,7 +57,13 @@ def flatten_obs(obs: dict) -> np.ndarray:
     imbalance = np.array(
         [(q_ns - q_ew) / (q_ns + q_ew + 1e-3)], dtype=np.float32
     )
-    return np.concatenate([vpl, ql, spd, wait, timer, phase_oh, nb, imbalance]).astype(np.float32)
+    # Absolute per-direction queue levels: lets the network distinguish "both empty"
+    # from "both heavy" — the ratio alone can't make this distinction.
+    dir_queues = np.array([
+        float(np.clip(q_ns / max(50.0 * half, 1.0), 0.0, 1.0)),
+        float(np.clip(q_ew / max(50.0 * half, 1.0), 0.0, 1.0)),
+    ], dtype=np.float32)
+    return np.concatenate([vpl, ql, spd, wait, timer, phase_oh, nb, imbalance, dir_queues]).astype(np.float32)
 
 
 # ---- Actor-Critic with GNN communication channel ----
@@ -154,19 +160,17 @@ class IPPOActorCritic(nn.Module):
 class IPPOConfig:
     env: EnvConfig = field(default_factory=EnvConfig)
     total_timesteps: int    = 2_000_000
-    n_steps:         int    = 1024         # steps per rollout per agent
+    n_steps:         int    = 2048         # steps per rollout per agent
     batch_size:      int    = 256
     n_epochs:        int    = 8
     gamma:           float  = 0.99
     gae_lambda:      float  = 0.95
     clip_eps:        float  = 0.2
     vf_coef:         float  = 0.5
-    # Tuned with centralized PPO (same reasoning): 3e-4 was unstable, 1e-4 left the
-    # reward flat, 2e-4 is the middle ground. IPPO has no target_kl gate, so the lr
-    # is the main knob here. ent_coef kept low so the policy commits.
-    ent_coef:        float  = 0.003
+    ent_coef:        float  = 0.01         # higher than before to slow entropy collapse
     max_grad_norm:   float  = 0.5
-    learning_rate:   float  = 2e-4
+    learning_rate:   float  = 1e-4         # halved from 2e-4: prevents destructive pg_loss spikes
+    target_kl:       float  = 0.015        # early-stop PPO epochs if KL diverges
     k_hops:          int    = 1            # GNN neighborhood hops
     gnn_hidden:      int    = 128
     gnn_embed:       int    = 64
@@ -329,7 +333,7 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
                     # Cycle through 20 seeds starting from cfg.seed+1, never
                     # revisiting cfg.seed itself (seed=42 consistently produces
                     # a harder traffic pattern that destabilises gradients).
-                    next_seed = cfg.seed + 1 + (episode % 20)
+                    next_seed = cfg.seed + 1 + (episode % 50)
                     obs_d, _ = env.reset(seed=next_seed)
                     # Rebuild adj_mask if topology changed (different seeds may
                     # produce different numbers of lights on the same grid).
@@ -382,13 +386,25 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
         ent_vals:  list = []
 
         bs = max(1, cfg.batch_size // n_agents)
+        kl_exceeded = False
+        last_kl     = 0.0
         for _ in range(cfg.n_epochs):
+            if kl_exceeded:
+                break
             perm = torch.randperm(T)
             for start in range(0, T, bs):
                 idx = perm[start:start + bs]
                 # flat_obs_all[idx]: (bs, N, F)  actions_all[idx]: (bs, N)
                 new_lp, entropy, vals = model.evaluate_actions(
                     flat_obs_all[idx], adj_mask, actions_all[idx])
+                # Approximate KL check before the update to enforce target_kl
+                with torch.no_grad():
+                    logratio  = new_lp - old_lp_all[idx]
+                    approx_kl = float(((logratio.exp() - 1) - logratio).mean())
+                if approx_kl > cfg.target_kl:
+                    last_kl     = approx_kl
+                    kl_exceeded = True
+                    break
                 adv   = advantages[idx]                       # (bs, N)
                 ratio = torch.exp(new_lp - old_lp_all[idx])  # (bs, N)
                 pg_loss = torch.max(
@@ -404,6 +420,8 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
                 pg_losses.append(pg_loss.item())
                 vf_losses.append(vf_loss.item())
                 ent_vals.append(entropy.mean().item())
+        if kl_exceeded:
+            _log(f"[IPPO] target_kl early stop: kl={last_kl:.4f}")
 
         update_count += 1
         upd_msg = (f"[IPPO] update={update_count} steps={total_steps} "
