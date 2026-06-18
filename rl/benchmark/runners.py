@@ -163,11 +163,36 @@ class PPOCentralizedRunner(BaseRunner):
     name = "ppo_centralized"
 
     def __init__(self, env_cfg: EnvConfig, model_path: str):
+        import os
+        import pickle
         import gymnasium
         from rl.env.traffic_env import TrafficEnv
         from rl.agents.centralized.ppo_agent import load_model
-        self._env   = gymnasium.wrappers.FlattenObservation(TrafficEnv(env_cfg))
-        self._model = load_model(model_path, self._env)
+
+        self._env = gymnasium.wrappers.FlattenObservation(TrafficEnv(env_cfg))
+
+        # Load the VecNormalize statistics saved alongside the model.
+        # Without these the model receives raw observations at evaluation time,
+        # which do not match the normalised distribution it was trained on.
+        # We load the pickle directly (SB3 excludes the venv from the pickle via
+        # __getstate__) so no second TrafficEnv is created.
+        self._vecnorm = None
+        vecnorm_path = model_path + "_vecnorm.pkl"
+        if os.path.exists(vecnorm_path):
+            with open(vecnorm_path, "rb") as f:
+                self._vecnorm = pickle.load(f)
+
+        # Load without passing env: avoids SB3 re-wrapping self._env in a
+        # Monitor + DummyVecEnv which would open a competing shm connection.
+        self._model = load_model(model_path)
+
+    def _normalize_obs(self, obs: np.ndarray) -> np.ndarray:
+        """Apply VecNormalize obs statistics if available."""
+        if self._vecnorm is None:
+            return obs
+        vn  = self._vecnorm
+        obs = (obs - vn.obs_rms.mean) / np.sqrt(vn.obs_rms.var + vn.epsilon)
+        return np.clip(obs, -vn.clip_obs, vn.clip_obs).astype(np.float32)
 
     def _run_one_episode(self, seed: int) -> EpisodeMetrics:
         obs, _ = self._env.reset(seed=seed)
@@ -180,7 +205,7 @@ class PPOCentralizedRunner(BaseRunner):
         ep_spd_acc  = 0.0
 
         while not done:
-            action, _ = self._model.predict(obs, deterministic=True)
+            action, _ = self._model.predict(self._normalize_obs(obs), deterministic=True)
             obs, _, terminated, truncated, info = self._env.step(action)
             done = terminated or truncated
             step += 1
