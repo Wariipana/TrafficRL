@@ -25,33 +25,43 @@ class NeighborAttentionConv(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,           # (N, in_features)
+        x: torch.Tensor,           # (N, in_features)  OR  (B, N, in_features)
         adj_mask: torch.Tensor,    # (N, N) bool — True where edge exists (incl. self)
-    ) -> torch.Tensor:             # (N, out_features)
-        N = x.size(0)
+    ) -> torch.Tensor:             # same leading dims as x
+        # Support both unbatched (N, F) and batched (B, N, F) inputs so the PPO
+        # update loop can forward an entire minibatch of timesteps at once instead
+        # of calling this once per timestep in a Python for-loop.
+        unbatched = x.dim() == 2
+        if unbatched:
+            x = x.unsqueeze(0)          # (1, N, F)
+
+        B, N, _ = x.shape
         H = self.num_heads
         D = self.head_dim
 
-        # (N, H, D)
-        Q = self.W_q(x).view(N, H, D)
-        K = self.W_k(x).view(N, H, D)
-        V = self.W_v(x).view(N, H, D)
+        # (B, N, H, D)
+        Q = self.W_q(x).view(B, N, H, D)
+        K = self.W_k(x).view(B, N, H, D)
+        V = self.W_v(x).view(B, N, H, D)
 
-        # Attention scores: (N, H, N) = Q @ K^T / sqrt(D)
-        scores = torch.einsum("nhd,mhd->hnm", Q, K) / (D ** 0.5)   # (H, N, N)
-        scores = scores.permute(1, 0, 2)                             # (N, H, N)
+        # Attention scores: (B, H, N, N)
+        scores = torch.einsum("bnhd,bmhd->bhnm", Q, K) / (D ** 0.5)
+        scores = scores.permute(0, 2, 1, 3)               # (B, N, H, N)
 
-        # Mask non-neighbors with -inf before softmax
-        mask = adj_mask.unsqueeze(1).expand(-1, H, -1)  # (N, H, N)
+        # adj_mask (N, N) broadcasts over batch and head dimensions
+        mask = adj_mask.unsqueeze(0).unsqueeze(2)          # (1, N, 1, N)
         scores = scores.masked_fill(~mask, float("-inf"))
         attn = F.softmax(scores, dim=-1)
-        attn = torch.nan_to_num(attn)   # nodes with no neighbors → 0
+        attn = torch.nan_to_num(attn)                      # isolated nodes → 0
 
-        # Aggregate: (N, H, D)
-        out = torch.einsum("nhm,mhd->nhd", attn, V)
-        out = out.reshape(N, H * D)
+        # Aggregate: (B, N, H, D)
+        out = torch.einsum("bnhm,bmhd->bnhd", attn, V)
+        out = out.reshape(B, N, H * D)
         out = self.W_o(out)
-        return self.norm(out + self.W_q(x) if out.shape == x.shape else out)
+        residual = self.W_q(x)                             # (B, N, out_features)
+        result = self.norm(out + residual if out.shape == residual.shape else out)
+
+        return result.squeeze(0) if unbatched else result
 
 
 class TrafficGNN(nn.Module):

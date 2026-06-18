@@ -189,31 +189,23 @@ def _update_worker(
     actions_all = torch.stack([r["actions"]   for r in rollout])   # (T, N)
     old_lp_all  = torch.stack([r["log_probs"] for r in rollout])   # (T, N)
 
-    # The GNN forward is defined for a single graph of N nodes against an (N, N)
-    # adjacency, so each rollout timestep must be evaluated on its own — flattening
-    # several timesteps into one (T*N, feat) batch while reusing the (N, N) mask
-    # mismatches whenever more than one timestep lands in a minibatch. Evaluate per
-    # timestep and average the PPO loss over the minibatch.
+    # GNN now accepts (B, N, F) — no per-timestep Python loop needed.
     worker.train()
     bs = max(1, T // 4)
     for _ in range(n_epochs):
         perm = torch.randperm(T)
         for start in range(0, T, bs):
             idx = perm[start:start + bs]
-            losses = []
-            for t in idx.tolist():
-                new_lp, entropy, vals = worker.evaluate_actions(
-                    flat_all[t], goals_all[t], adj_mask, actions_all[t])
-                adv   = advantages[t]
-                ratio = torch.exp(new_lp - old_lp_all[t])
-                pg_loss = torch.max(
-                    -adv * ratio,
-                    -adv * ratio.clamp(1 - clip_eps, 1 + clip_eps),
-                ).mean()
-                vf_loss = F.mse_loss(vals, returns[t])
-                losses.append(pg_loss + vf_coef * vf_loss - ent_coef * entropy.mean())
-
-            loss = torch.stack(losses).mean()
+            new_lp, entropy, vals = worker.evaluate_actions(
+                flat_all[idx], goals_all[idx], adj_mask, actions_all[idx])
+            adv   = advantages[idx]                        # (bs, N)
+            ratio = torch.exp(new_lp - old_lp_all[idx])   # (bs, N)
+            pg_loss = torch.max(
+                -adv * ratio,
+                -adv * ratio.clamp(1 - clip_eps, 1 + clip_eps),
+            ).mean()
+            vf_loss = F.mse_loss(vals, returns[idx])
+            loss = pg_loss + vf_coef * vf_loss - ent_coef * entropy.mean()
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(worker.parameters(), 0.5)

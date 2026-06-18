@@ -325,32 +325,27 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
         actions_all  = torch.stack(buffer.actions)
         old_lp_all   = torch.stack(buffer.log_probs)
 
-        # The GNN forward is defined for a single graph of N nodes against an
-        # (N, N) adjacency, so each rollout timestep must be evaluated on its own
-        # — flattening several timesteps into one (T*N, feat) batch while reusing
-        # the (N, N) mask mismatches whenever batch_size // n_agents > 1. We
-        # evaluate per timestep and average the PPO loss over the minibatch.
+        # The GNN now accepts (B, N, F) batched input — the (N, N) adjacency
+        # mask broadcasts over the batch dimension automatically. This replaces
+        # the previous per-timestep Python for-loop, which was the main training
+        # bottleneck: one forward+backward per minibatch instead of bs individual
+        # passes serialised through Python's GIL.
         bs = max(1, cfg.batch_size // n_agents)
         for _ in range(cfg.n_epochs):
-            # Shuffle timesteps
             perm = torch.randperm(T)
             for start in range(0, T, bs):
                 idx = perm[start:start + bs]
-                losses = []
-                for t in idx.tolist():
-                    new_lp, entropy, vals = model.evaluate_actions(
-                        flat_obs_all[t], adj_mask, actions_all[t])
-                    adv   = advantages[t]
-                    ratio = torch.exp(new_lp - old_lp_all[t])
-                    pg_loss = torch.max(
-                        -adv * ratio,
-                        -adv * ratio.clamp(1 - cfg.clip_eps, 1 + cfg.clip_eps),
-                    ).mean()
-                    vf_loss = F.mse_loss(vals, returns[t])
-                    losses.append(pg_loss + cfg.vf_coef * vf_loss
-                                  - cfg.ent_coef * entropy.mean())
-
-                loss = torch.stack(losses).mean()
+                # flat_obs_all[idx]: (bs, N, F)  actions_all[idx]: (bs, N)
+                new_lp, entropy, vals = model.evaluate_actions(
+                    flat_obs_all[idx], adj_mask, actions_all[idx])
+                adv   = advantages[idx]                       # (bs, N)
+                ratio = torch.exp(new_lp - old_lp_all[idx])  # (bs, N)
+                pg_loss = torch.max(
+                    -adv * ratio,
+                    -adv * ratio.clamp(1 - cfg.clip_eps, 1 + cfg.clip_eps),
+                ).mean()
+                vf_loss = F.mse_loss(vals, returns[idx])
+                loss = pg_loss + cfg.vf_coef * vf_loss - cfg.ent_coef * entropy.mean()
                 optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)

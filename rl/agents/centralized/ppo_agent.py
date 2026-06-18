@@ -17,7 +17,7 @@ class TrainingConfig:
     env: EnvConfig = field(default_factory=EnvConfig)
     total_timesteps: int = 1_000_000
     n_steps:         int = 2048
-    batch_size:      int = 64
+    batch_size:      int = 512
     n_epochs:        int = 10
     # Tuned across real runs (4x4 then 8x8):
     #  pass 1 (3e-4, kl 0.03):  approx_kl ~0.12, clip ~0.6 — unstable.
@@ -30,9 +30,16 @@ class TrainingConfig:
     #          a looser cap + less entropy pressure lets the policy actually commit.
     #          With many agents the action-space entropy is large (56·ln2 ≈ 39), so
     #          even 0.001 keeps meaningful exploration.
-    learning_rate:   float = 2e-4
+    # Tuning rationale for the centralized case (56 agents flattened):
+    #  batch_size 64 → KL explodes to 0.14-0.16 in epoch 1-2, early-stop fires,
+    #  policy never completes 10 epochs → stays near-uniform (entropy≈56·ln2≈39).
+    #  512 gives much cleaner gradient estimates across the large action space.
+    #  lr 2e-4 was too aggressive given batch noise; 5e-5 converges slower but
+    #  stays below target_kl. target_kl 0.05 (vs 0.12) ensures updates are
+    #  small enough that all 10 epochs can complete without early-stop.
+    learning_rate:   float = 5e-5
     ent_coef:        float = 0.001
-    target_kl:       float = 0.12      # stop a PPO update early if it diverges too far
+    target_kl:       float = 0.05      # stop a PPO update early if it diverges too far
     log_dir:         str  = "rl/runs"
     save_path:       str  = "rl/models/ppo_centralized"
     seed:            int  = 42

@@ -8,7 +8,10 @@
 class TrafficLightSystem {
 public:
     static constexpr float DEFAULT_MIN_GREEN = 10.0f;  // seconds
-    static constexpr float DEFAULT_MAX_GREEN = 60.0f;
+    // 120 s matches the Python normalization (phase_timer / 120.0 in flatten_obs).
+    // The old 60 s cap only filled half the [0,1] observation range and could
+    // override the agent before long unidirectional green phases were useful.
+    static constexpr float DEFAULT_MAX_GREEN = 120.0f;
 
     void init(const std::vector<uint32_t>& light_node_ids);
     void reset();
