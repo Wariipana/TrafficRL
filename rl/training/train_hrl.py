@@ -53,8 +53,10 @@ def main() -> None:
     w_opt   = torch.optim.Adam(worker.parameters(), lr=2e-4)  # tuned with PPO/IPPO
 
     os.makedirs(args.save_dir, exist_ok=True)
-    total_steps  = 0
-    episode      = 0
+    total_steps    = 0
+    env_steps      = 0   # env steps (≠ total_steps which counts per-agent steps)
+    episode        = 0
+    w_update_count = 0
     w_rollout: list[dict] = []
     # Per-episode reward accumulators so the log shows whether learning progresses:
     # the Worker's total reward (env + intrinsic goal shaping) and the env-only
@@ -68,8 +70,10 @@ def main() -> None:
     while total_steps < args.steps:
         state = env._last_state
 
-        # Manager produces goals (every decision_interval steps)
-        goals_np = manager.get_goals(state, total_steps)      # (Z, GOAL_DIM)
+        # Manager produces goals every decision_interval *env* steps.
+        # total_steps counts per-agent steps (×n_agents), so we pass env_steps
+        # instead to avoid the manager firing 16× too often with n_agents=16.
+        goals_np = manager.get_goals(state, env_steps)        # (Z, GOAL_DIM)
         zone_feats = aggregate_zones(state, num_zones)
 
         # Build Worker inputs
@@ -87,7 +91,8 @@ def main() -> None:
 
         action_dict = {f"light_{i}": int(actions_t[i]) for i in range(n_agents)}
         obs_d, rews_d, terms_d, trunc_d, _ = env.step(action_dict)
-        total_steps += n_agents
+        total_steps += 1   # count env steps, not per-agent steps
+        env_steps   += 1
 
         # Intrinsic reward shaping
         intrinsic = goal_reward_shaping(env._last_state, goals_np, num_zones)
@@ -140,8 +145,14 @@ def main() -> None:
 
         # Worker PPO update every 1024 steps (per agent)
         if len(w_rollout) >= 1024 // n_agents:
-            _update_worker(worker, w_opt, w_rollout, adj_mask, device)
+            w_metrics = _update_worker(worker, w_opt, w_rollout, adj_mask, device)
             w_rollout.clear()
+            w_update_count += 1
+            if w_update_count % 50 == 0:
+                print(f"[HRL worker] update={w_update_count} steps={total_steps} "
+                      f"pg_loss={w_metrics['pg']:.4f} "
+                      f"vf_loss={w_metrics['vf']:.4f} "
+                      f"entropy={w_metrics['ent']:.4f}")
 
     worker_path  = os.path.join(args.save_dir, "worker.pt")
     manager_path = os.path.join(args.save_dir, "manager.pt")
@@ -164,7 +175,7 @@ def _update_worker(
     vf_coef:   float = 0.5,
     ent_coef:  float = 0.003,   # lowered like PPO/IPPO so the policy commits
     n_epochs:  int   = 4,
-) -> None:
+) -> dict:
     import torch.nn.functional as F
 
     T = len(rollout)
@@ -191,6 +202,9 @@ def _update_worker(
 
     # GNN now accepts (B, N, F) — no per-timestep Python loop needed.
     worker.train()
+    pg_losses: list = []
+    vf_losses: list = []
+    ent_vals:  list = []
     bs = max(1, T // 4)
     for _ in range(n_epochs):
         perm = torch.randperm(T)
@@ -210,8 +224,16 @@ def _update_worker(
             loss.backward()
             torch.nn.utils.clip_grad_norm_(worker.parameters(), 0.5)
             optimizer.step()
+            pg_losses.append(pg_loss.item())
+            vf_losses.append(vf_loss.item())
+            ent_vals.append(entropy.mean().item())
 
     worker.eval()
+    return {
+        "pg":  float(np.mean(pg_losses)),
+        "vf":  float(np.mean(vf_losses)),
+        "ent": float(np.mean(ent_vals)),
+    }
 
 
 if __name__ == "__main__":

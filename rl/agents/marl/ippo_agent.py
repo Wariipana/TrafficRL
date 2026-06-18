@@ -259,8 +259,9 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
     optimizer = optim.Adam(model.parameters(), lr=cfg.learning_rate)
     buffer    = RolloutBuffer(cfg.n_steps, n_agents, device)
 
-    total_steps = 0
-    episode     = 0
+    total_steps  = 0
+    episode      = 0
+    update_count = 0
     # Per-episode reward accumulator so the log shows whether the agent is actually
     # learning (mean reward per agent over the episode) — not just the episode count.
     ep_reward_sum = 0.0
@@ -292,7 +293,7 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
                 )
 
                 buffer.add(flat_all, adj_mask, actions_t, log_probs_t, rewards_t, values_t, dones_t)
-                total_steps += n_agents
+                total_steps += 1          # count env steps, not per-agent steps
                 ep_reward_sum += float(rewards_t.mean())  # mean reward across agents this step
                 ep_len        += 1
 
@@ -330,6 +331,10 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
         # the previous per-timestep Python for-loop, which was the main training
         # bottleneck: one forward+backward per minibatch instead of bs individual
         # passes serialised through Python's GIL.
+        pg_losses: list = []
+        vf_losses: list = []
+        ent_vals:  list = []
+
         bs = max(1, cfg.batch_size // n_agents)
         for _ in range(cfg.n_epochs):
             perm = torch.randperm(T)
@@ -350,6 +355,16 @@ def train_ippo(cfg: IPPOConfig) -> IPPOActorCritic:
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
                 optimizer.step()
+                pg_losses.append(pg_loss.item())
+                vf_losses.append(vf_loss.item())
+                ent_vals.append(entropy.mean().item())
+
+        update_count += 1
+        if update_count % 10 == 0:
+            print(f"[IPPO] update={update_count} steps={total_steps} "
+                  f"pg_loss={np.mean(pg_losses):.4f} "
+                  f"vf_loss={np.mean(vf_losses):.4f} "
+                  f"entropy={np.mean(ent_vals):.4f}")
 
     torch.save(model.state_dict(), cfg.save_path + ".pt")
     env.close()
