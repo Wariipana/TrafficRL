@@ -16,7 +16,7 @@ from rl.models.gnn import TrafficGNN, build_adjacency_mask
 
 # ---- Local observation encoder ----
 
-LOCAL_FEAT_DIM = MAX_LANES * 3 + 1 + 1 + 2 + 3   # vpl + queue + speed + wait + timer + phase_oh + neighbor
+LOCAL_FEAT_DIM = MAX_LANES * 3 + 1 + 1 + 2 + 3 + 1   # vpl + queue + speed + wait + timer + phase_oh + neighbor + queue_imbalance
 
 
 class LocalEncoder(nn.Module):
@@ -45,7 +45,19 @@ def flatten_obs(obs: dict) -> np.ndarray:
     phase  = int(obs["current_phase"])
     phase_oh = np.array([float(phase == 0), float(phase == 1)], dtype=np.float32)
     nb     = obs["neighbor_summary"].flatten()
-    return np.concatenate([vpl, ql, spd, wait, timer, phase_oh, nb]).astype(np.float32)
+    # Queue imbalance: (q_NS - q_EW) / (q_NS + q_EW + ε) ∈ [-1, +1].
+    # Positive → NS heavier, Negative → EW heavier.
+    # Pre-computed so the network doesn't have to learn the lane-index split;
+    # paired with phase_oh the policy can learn "imbalance > 0 AND phase=1 → switch"
+    # in far fewer episodes than from raw queue_length alone.
+    raw_ql = obs["queue_length"]          # shape (MAX_LANES,); NS=[:half], EW=[half:]
+    half   = len(raw_ql) // 2             # MAX_LANES//2 = 4
+    q_ns   = float(np.sum(raw_ql[:half]))
+    q_ew   = float(np.sum(raw_ql[half:]))
+    imbalance = np.array(
+        [(q_ns - q_ew) / (q_ns + q_ew + 1e-3)], dtype=np.float32
+    )
+    return np.concatenate([vpl, ql, spd, wait, timer, phase_oh, nb, imbalance]).astype(np.float32)
 
 
 # ---- Actor-Critic with GNN communication channel ----
