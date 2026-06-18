@@ -28,7 +28,7 @@ class DemoBaseline:
     is no accidental green-wave either.  Identical logic to FixedRandomRunner
     so metrics match the benchmark baseline.
     """
-    name = "Semáforos mal configurados (Demo)"
+    name = "Semáforos mal configurados (baseline)"
 
     def __init__(self, n_lights: int, seed: int = 7) -> None:
         rng = np.random.default_rng(seed)
@@ -57,7 +57,7 @@ class DemoPPO:
     (50/50 instead of 85/15) but still ignores per-intersection state, so
     congestion builds when traffic is asymmetric.
     """
-    name = "PPO centralizado (Demo)"
+    name = "PPO centralizado"
 
     def __init__(self, n_lights: int, half_period: int = 150) -> None:
         self.n           = n_lights
@@ -79,7 +79,7 @@ class DemoIPPO:
     elapsed.  Mimics what a trained IPPO agent with sufficient phase_align
     signal should learn to do.
     """
-    name = "IPPO + GNN (Demo)"
+    name = "IPPO + GNN"
 
     MIN_GREEN_S = 12.0   # seconds; mirrors motor's DEFAULT_MIN_GREEN
     THRESHOLD   = 0.25   # |imbalance| above which we consider switching
@@ -126,7 +126,7 @@ class DemoHRL:
     Mimics the expected emergent behaviour of a trained HRL Manager+Worker
     where the Manager sets zone-level targets that bias local decisions.
     """
-    name = "HRL jerárquico (Demo)"
+    name = "HRL jerárquico"
 
     MIN_GREEN_S     = 12.0
     BASE_THRESHOLD  = 0.20

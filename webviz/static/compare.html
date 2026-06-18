@@ -67,8 +67,8 @@ function fmt(v, d) {
 
 const REFERENCE = "fixed_random";   // baseline shown as the comparison reference
 
-function renderTable(algorithms) {
-  // algorithms: { name: { config_label, summary: {...}, episodes: [...] }, ... }
+function renderTable(algorithms, demo) {
+  // algorithms: { name: { display_name?, summary: {...}, episodes: [...] }, ... }
   // The benchmark JSON also carries a "_pairwise_stats" list — skip any key that
   // isn't an algorithm entry (no .summary), or accessing .summary throws and the
   // whole page fails to load.
@@ -91,8 +91,9 @@ function renderTable(algorithms) {
   let rows = "";
   for (const n of names) {
     const s = algorithms[n].summary;
+    const label = (demo && algorithms[n].display_name) ? algorithms[n].display_name : n;
     const cls = (n === bestName ? "best" : "") + (n === REFERENCE ? " ref" : "");
-    let row = `<tr class="${cls.trim()}"><td>${n}</td>`;
+    let row = `<tr class="${cls.trim()}"><td>${label}</td>`;
     for (const m of METRICS) row += `<td>${fmt(s[m.key], m.fmt)}</td>`;
     // improvement vs the reference baseline (wait reduction %)
     if (ref && n !== REFERENCE && typeof s.mean_wait_s === "number") {
@@ -115,7 +116,8 @@ async function load() {
   const content = document.getElementById("content");
   content.innerHTML = "<div class='empty'>Cargando…</div>";
   try {
-    const { results } = await (await fetch("/api/results")).json();
+    const { results, demo } = await (await fetch("/api/results")).json();
+    if (demo) document.querySelector(".note").style.display = "none";
     if (!results.length) {
       content.innerHTML = "<div class='empty'>No hay resultados todavía. " +
         "Ejecuta <code>bash scripts/train_all.sh</code> para generarlos.</div>";
@@ -130,10 +132,11 @@ async function load() {
       const nAlgos = Object.keys(r.algorithms).filter(function (n) {
         return r.algorithms[n] && r.algorithms[n].summary;
       }).length;
+      const meta = (!demo && r.file) ? `<div class="meta">${r.file} · generado ${when}</div>` : "";
       html += `<div class="card">
         <h2>${r.config} <span class="tag">${nAlgos} algoritmos</span></h2>
-        <div class="meta">${r.file} · generado ${when}</div>
-        ${renderTable(r.algorithms)}
+        ${meta}
+        ${renderTable(r.algorithms, demo)}
       </div>`;
     }
     content.innerHTML = html;

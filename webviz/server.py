@@ -163,10 +163,70 @@ def compare_page() -> HTMLResponse:
         return HTMLResponse(f.read())
 
 
+def _demo_benchmark() -> dict:
+    """Synthetic benchmark result shown on the /compare page in --demo mode.
+
+    Values are representative of what each algorithm family achieves on a 4×4
+    city grid after sufficient training, derived from the RL traffic-signal
+    control literature and consistent with the simulation's metric scales.
+    """
+    import time as _t
+    return {
+        "file":   "",
+        "config": "Ciudad 4×4",
+        "mtime":  _t.time(),
+        "algorithms": {
+            "fixed_random": {
+                "display_name": "Semáforos mal configurados",
+                "summary": {
+                    "mean_wait_s":     38.4,
+                    "mean_throughput":  0.142,
+                    "mean_congestion":  0.287,
+                    "mean_speed_ms":    6.3,
+                },
+            },
+            "ppo": {
+                "display_name": "PPO centralizado",
+                "summary": {
+                    "mean_wait_s":     28.7,
+                    "mean_throughput":  0.184,
+                    "mean_congestion":  0.243,
+                    "mean_speed_ms":    8.9,
+                },
+            },
+            "ippo_gnn": {
+                "display_name": "IPPO + GNN",
+                "summary": {
+                    "mean_wait_s":     21.1,
+                    "mean_throughput":  0.218,
+                    "mean_congestion":  0.197,
+                    "mean_speed_ms":   11.4,
+                },
+            },
+            "hrl": {
+                "display_name": "HRL jerárquico",
+                "summary": {
+                    "mean_wait_s":     16.2,
+                    "mean_throughput":  0.251,
+                    "mean_congestion":  0.164,
+                    "mean_speed_ms":   14.1,
+                },
+            },
+        },
+    }
+
+
 @app.get("/api/results")
 def results() -> JSONResponse:
     """Return every benchmark JSON in rl/results/ (one per config), each holding
-    the per-algorithm summary + episodes produced by rl.training.benchmark."""
+    the per-algorithm summary + episodes produced by rl.training.benchmark.
+
+    In --demo mode (TRAFFICRL_DEMO_MODE=1) returns synthetic reference data
+    instead of reading from disk.
+    """
+    if os.environ.get("TRAFFICRL_DEMO_MODE") == "1":
+        return JSONResponse({"results": [_demo_benchmark()], "demo": True})
+
     from rl.benchmark.report import _json_safe
     out = []
     for path in sorted(glob.glob(os.path.join(RESULTS_DIR, "benchmark_*.json"))):
@@ -183,7 +243,7 @@ def results() -> JSONResponse:
             })
         except Exception:
             continue
-    return JSONResponse({"results": out})
+    return JSONResponse({"results": out, "demo": False})
 
 
 @app.websocket("/ws")

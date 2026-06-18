@@ -500,7 +500,7 @@ class TrainingSession:
         """
         out: list[dict] = []
 
-        # Demo mode: inject virtual model entries (no files needed)
+        # Demo mode: only show the four heuristic controllers, no real models.
         if os.environ.get("TRAFFICRL_DEMO_MODE") == "1":
             from rl.demo.controllers import DEMO_ALGO_LABELS
             for algo_key, label in DEMO_ALGO_LABELS.items():
@@ -511,6 +511,7 @@ class TrainingSession:
                     "saved_at": "",
                     "config":   "",
                 })
+            return out
 
         base = self.MODELS_DIR
         if not os.path.isdir(base):
