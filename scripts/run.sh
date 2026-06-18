@@ -23,10 +23,28 @@ SERVER="$ROOT/simulation/build/trafficrl_server"
 PYTHON="$ROOT/.venv/bin/python"
 PORT="${PORT:-8200}"
 
+# Parse --demo flag: activates the four heuristic demo controllers in the
+# webviz model dropdown without needing trained weights.  The flag is consumed
+# here and NOT forwarded to the C++ server.
+DEMO_MODE=0
+FILTERED_ARGS=()
+for arg in "$@"; do
+  if [[ "$arg" == "--demo" ]]; then
+    DEMO_MODE=1
+  else
+    FILTERED_ARGS+=("$arg")
+  fi
+done
+
 # Argumentos del motor: por defecto una ciudad 4x4 (la más ágil para entrenar).
-SERVER_ARGS=("$@")
+SERVER_ARGS=("${FILTERED_ARGS[@]}")
 if [[ ${#SERVER_ARGS[@]} -eq 0 ]]; then
   SERVER_ARGS=(--width 4 --height 4 --seed 42)
+fi
+
+if [[ "$DEMO_MODE" -eq 1 ]]; then
+  export TRAFFICRL_DEMO_MODE=1
+  echo "[run] Modo demo activado — los 4 controladores aparecerán en la sección 'Modelo'."
 fi
 
 # --- comprobaciones previas --------------------------------------------------
